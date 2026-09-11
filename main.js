@@ -562,10 +562,10 @@ function open() {
     <div class="row">
       <div><label>Scene name</label><input type="text" name="name" value="NET Architecture"></div>
       <div><label>Difficulty</label><select name="tier">${tierOpts}</select></div>
-      <div style="flex:0"><button type="button" data-roll title="Roll it by the book: 3d6 floors, d10 branches, Lobby and Body tables"><i class="fas fa-dice"></i> Roll</button></div>
+      <div style="flex:0"><button type="button" data-roll title="Roll it by the book: 3d6 floors, d10 branches, Lobby and Body tables"><i class="fas fa-dice"></i> Roll by the book</button></div>
     </div>
     <label>Floors</label>
-    <textarea name="floors" placeholder="1: Password DV8&#10;2: File DV8&#10;3: Hellhound x2&#10;4: Control Node DV8, Efreet&#10;Branch from 3:&#10;5: Killer&#10;6: File DV8"></textarea>
+    <textarea name="floors" placeholder="Click Roll by the book and this fills in. Or type your own floors, one per line, like:&#10;1: Password DV8&#10;2: File DV8&#10;3: Hellhound x2&#10;4: Control Node DV8, Efreet&#10;Branch from 3:&#10;5: Killer&#10;6: File DV8"></textarea>
     <p class="hint">One floor per line: Password, File or Control Node (add DVn, or the difficulty's DV is used), a Black ICE name (add xN for copies), a Demon name. Commas put several on one floor. "Branch from N:" starts a branch off main floor N. Lines starting with # are ignored.</p>
   </form>`;
   let rolled = null;
