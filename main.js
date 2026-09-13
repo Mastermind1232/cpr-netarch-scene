@@ -19,9 +19,15 @@
 const ID = "cpr-netarch-scene";
 const G = 150;                                   // grid size of the backdrop, px
 const SCENE = { width: 3840, height: 2160 };
-/** Lattice of 2x2 rooms: 9 columns (x 4..22) by 4 rows (y 3..11), all in grid units. */
+/** Lattice of 2x2 rooms: 9 columns (x 4..22) by 4 rows (y 3..11), in grid units measured from the backdrop's corner. */
 const LAT = { cols: 9, rows: 4, x0: 4, y0: 3, entryRow: 1 };
 const ROOM = 2;
+const PADDING = 0.25;
+/**
+ * Foundry pads every scene, and document coordinates count from the padded
+ * canvas corner, not the backdrop's. The pad is rounded up to whole squares.
+ */
+const PAD = { x: Math.ceil((PADDING * SCENE.width) / G), y: Math.ceil((PADDING * SCENE.height) / G) };
 
 const TIERS = ["Basic", "Standard", "Uncommon", "Advanced"];
 const TIER_DV = { Basic: 6, Standard: 8, Uncommon: 10, Advanced: 12 };
@@ -307,9 +313,9 @@ function tileDoc({ src, x, y, w, h, sort = 0 }) {
   return { x: px(x), y: px(y), width: px(w), height: px(h), texture: { src, fit: "contain", anchorX: 0.5, anchorY: 0.5 }, sort, alpha: 1, hidden: false, locked: false, elevation: 0 };
 }
 
-/** Grid coordinates of the room in cell (c, r). */
+/** Canvas grid coordinates of the room in cell (c, r), padding included. */
 function roomAt([c, r]) {
-  return { x: LAT.x0 + ROOM * c, y: LAT.y0 + ROOM * r };
+  return { x: PAD.x + LAT.x0 + ROOM * c, y: PAD.y + LAT.y0 + ROOM * r };
 }
 
 function sharedEdge(a, b) {
@@ -359,9 +365,9 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
   // The entry corridor: see-through side walls, an open door into floor 1.
   const E = roomAt(placed.main[0]);
   const walls = [
-    wallDoc([0, E.y, E.x, E.y], { sight: 0 }),
-    wallDoc([0, E.y + ROOM, E.x, E.y + ROOM], { sight: 0 }),
-    wallDoc([0, E.y, 0, E.y + ROOM], { sight: 0 }),
+    wallDoc([PAD.x, E.y, E.x, E.y], { sight: 0 }),
+    wallDoc([PAD.x, E.y + ROOM, E.x, E.y + ROOM], { sight: 0 }),
+    wallDoc([PAD.x, E.y, PAD.x, E.y + ROOM], { sight: 0 }),
   ];
   setEdge([E.x, E.y, E.x, E.y + ROOM], { door: 1, ds: 1 });
   walls.push(...edges.values());
@@ -406,12 +412,12 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
 
   const sceneData = {
     name, navigation: true,
-    width: SCENE.width, height: SCENE.height, padding: 0.25,
+    width: SCENE.width, height: SCENE.height, padding: PADDING,
     background: { src: backdrop, fit: "fill" }, backgroundColor: "#000000",
     grid: { type: 1, size: G, distance: 2, units: "m", alpha: 0.2, color: "#ffffff" },
     tokenVision: true, fog: { exploration: true },
     environment: { darknessLevel: 0, globalLight: { enabled: true, alpha: 0.5, bright: false } },
-    initial: { x: SCENE.width / 2, y: SCENE.height / 2, scale: 0.5 },
+    initial: { x: PAD.x * G + SCENE.width / 2, y: PAD.y * G + SCENE.height / 2, scale: 0.5 },
     walls, tokens, tiles,
     flags: { [ID]: { floors: floors.map((f) => ({ n: f.n, path: f.path, cell: f.cell, text: floorText(f) })), bottom: deepest.n, notes: placed.notes } },
   };
@@ -617,4 +623,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };

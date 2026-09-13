@@ -177,7 +177,7 @@ check("T8 scene data: walls, doors, tokens, tiles, root", () => {
   const G = 150;
   const edgeSet = new Set(s.walls.map((w) => { const a = w.c.slice(0, 2).join(","), b = w.c.slice(2).join(","); return a < b ? `${a}|${b}` : `${b}|${a}`; }));
   for (const f of floors) {
-    const x = (M.LAT.x0 + 2 * f.cell[0]) * G, y = (M.LAT.y0 + 2 * f.cell[1]) * G;
+    const x = (M.PAD.x + M.LAT.x0 + 2 * f.cell[0]) * G, y = (M.PAD.y + M.LAT.y0 + 2 * f.cell[1]) * G;
     const need = [[x, y, x + 2 * G, y], [x, y + 2 * G, x + 2 * G, y + 2 * G], [x, y, x, y + 2 * G], [x + 2 * G, y, x + 2 * G, y + 2 * G]];
     need.forEach((c) => { const a = c.slice(0, 2).join(","), b = c.slice(2).join(","); assert(edgeSet.has(a < b ? `${a}|${b}` : `${b}|${a}`), `room ${f.n} missing a side`); });
   }
@@ -191,7 +191,7 @@ check("T8 scene data: walls, doors, tokens, tiles, root", () => {
   eq(byName("Efreet")[0].actorId, "E1", "demon actor"); eq(byName("Efreet")[0].texture.src, `${ART}/Efreet.webm`, "demon art");
   s.tokens.forEach((t) => assert(t.actorId !== null || t.disposition === 0, `token ${t.name} hostile without actor`));
   for (const f of floors) {
-    const x = (M.LAT.x0 + 2 * f.cell[0]) * G, y = (M.LAT.y0 + 2 * f.cell[1]) * G;
+    const x = (M.PAD.x + M.LAT.x0 + 2 * f.cell[0]) * G, y = (M.PAD.y + M.LAT.y0 + 2 * f.cell[1]) * G;
     const mine = s.tokens.filter((t) => t.x >= x && t.x < x + 2 * G && t.y >= y && t.y < y + 2 * G);
     const want = f.items.reduce((n, it) => n + (it.kind === "ice" ? it.count : 1), 0);
     eq(mine.length, want, `floor ${f.n} token count`);
@@ -201,9 +201,19 @@ check("T8 scene data: walls, doors, tokens, tiles, root", () => {
   eq(bottom, 11, "bottom is the last floor of branch B");
   const root = s.tiles.find((t) => t.texture.src.endsWith("Root.webm"));
   const last = floors[10];
-  eq([root.x, root.y], [(M.LAT.x0 + 2 * last.cell[0]) * G, (M.LAT.y0 + 2 * last.cell[1]) * G], "root under the deepest floor");
+  eq([root.x, root.y], [(M.PAD.x + M.LAT.x0 + 2 * last.cell[0]) * G, (M.PAD.y + M.LAT.y0 + 2 * last.cell[1]) * G], "root under the deepest floor");
   eq(s.tiles.filter((t) => /NUMBERS\/\d+\.webm$/.test(t.texture.src)).length, 11, "number tiles");
   eq(s.flags[M.ID].bottom, 11, "flag bottom");
+});
+
+check("T8b every room sits inside the backdrop once padding is accounted for", () => {
+  eq([M.PAD.x, M.PAD.y], [7, 4], "pad in squares");
+  const text = Array.from({ length: 18 }, (_, i) => `${i + 1}: File`).join("\n") + "\nBranch from 3:\nWisp\nFile\nFile\nFile\nFile\nBranch from 6:\nWisp\nFile\nFile\nFile\nFile";
+  const arch = M.parseText(text);
+  const { sceneData: s } = M.buildSceneData(arch, M.layout(arch), { name: "T", backdrop: BACK, art: ART });
+  const left = M.PAD.x * 150, top = M.PAD.y * 150, right = left + 3840, bottom = top + 2160;
+  s.tokens.forEach((t) => assert(t.x >= left && t.x + 150 <= right && t.y >= top && t.y + 150 <= bottom, `token off backdrop at ${t.x},${t.y}`));
+  s.walls.forEach((w) => assert(w.c[0] >= left && w.c[2] <= right && w.c[1] >= top && w.c[3] <= bottom, `wall off backdrop ${w.c}`));
 });
 
 check("T9 roll -> text -> parse round trip keeps every floor", () => {
