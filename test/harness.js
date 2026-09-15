@@ -126,7 +126,11 @@ check("T5 layout: every rolled architecture fits, rooms unique and chained", () 
     const keys = new Set(cells.map((c) => c.join(",")));
     assert(keys.size === cells.length, "rooms overlap");
     cells.forEach(([c, r]) => assert(c >= 0 && c < M.LAT.cols && r >= 0 && r < M.LAT.rows, `off lattice ${c},${r}`));
-    eq(p.main[0], [0, M.LAT.entryRow], "entry room");
+    const fellBack = p.notes.some((n) => /starts at the gate/.test(n));
+    if (a.main.length <= M.LAT.cols && !fellBack) {
+      eq(p.main[0], [M.LAT.cols - a.main.length, M.LAT.entryRow], "short paths are pushed to the right");
+      eq(p.main[p.main.length - 1], [M.LAT.cols - 1, M.LAT.entryRow], "and end in the far-right room");
+    } else eq(p.main[0], [0, M.LAT.entryRow], "long or boxed-in paths start at the gate");
     for (let i = 1; i < p.main.length; i++) assert(adjacent(p.main[i - 1], p.main[i]), "main chain broken");
     p.branches.forEach((b, i) => {
       assert(adjacent(p.main[b.attach - 1], b.cells[0]), "branch not attached");
@@ -139,10 +143,17 @@ check("T5 layout: every rolled architecture fits, rooms unique and chained", () 
 check("T6 layout: an 18-floor main snakes along the entry row and back on the row above", () => {
   const a = M.parseText(Array.from({ length: 18 }, (_, i) => `${i + 1}: File`).join("\n"));
   const p = M.layout(a);
-  eq(p.main.slice(0, 9).map((c) => c[1]), Array(9).fill(1), "first 9 in entry row");
-  eq(p.main.slice(9).map((c) => c[1]), Array(9).fill(0), "next 9 in row above");
-  eq(p.main[8], [8, 1], "turns at the right end");
-  eq(p.main[9], [8, 0], "goes up");
+  const e = M.LAT.entryRow;
+  eq(p.main.slice(0, 9).map((c) => c[1]), Array(9).fill(e), "first 9 in entry row");
+  eq(p.main.slice(9).map((c) => c[1]), Array(9).fill(e - 1), "next 9 in row above");
+  eq(p.main[8], [8, e], "turns at the right end");
+  eq(p.main[9], [8, e - 1], "goes up");
+});
+
+check("T6b layout: a 5-floor main sits in the right five rooms of the entry row", () => {
+  const a = M.parseText(Array.from({ length: 5 }, (_, i) => `${i + 1}: File`).join("\n"));
+  const p = M.layout(a);
+  eq(p.main, [[4, 2], [5, 2], [6, 2], [7, 2], [8, 2]], "columns 4..8 on the entry row");
 });
 
 check("T7 layout: crowded branches fit, a blocked attach point moves and says so", () => {

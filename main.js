@@ -19,8 +19,12 @@
 const ID = "cpr-netarch-scene";
 const G = 150;                                   // grid size of the backdrop, px
 const SCENE = { width: 3840, height: 2160 };
-/** Lattice of 2x2 rooms: 9 columns (x 4..22) by 4 rows (y 3..11), in grid units measured from the backdrop's corner. */
-const LAT = { cols: 9, rows: 4, x0: 4, y0: 3, entryRow: 1 };
+/**
+ * Lattice of 2x2 rooms: 9 columns (x 4..22) by 4 rows (y 2..10), in grid
+ * units measured from the backdrop's corner. The entry row, y 6..8, is
+ * level with the gate on the hall's left wall and the dais on its right.
+ */
+const LAT = { cols: 9, rows: 4, x0: 4, y0: 2, entryRow: 2 };
 const ROOM = 2;
 const PADDING = 0.25;
 /**
@@ -246,6 +250,17 @@ const DIRS = { right: [1, 0], up: [0, -1], left: [-1, 0], down: [0, 1] };
  * that cannot start where asked is tried from the nearest other floors.
  */
 function layout(arch) {
+  try { return layoutWith(arch, true); }
+  catch (err) {
+    // A right-aligned main path can box its branches against the hall's end;
+    // fall back to the gate-side layout, which has the whole hall to spread into.
+    const alt = layoutWith(arch, false);
+    alt.notes.push("The main path starts at the gate instead of ending by the dais, to make room for its branches.");
+    return alt;
+  }
+}
+
+function layoutWith(arch, rightAlign) {
   const { cols, rows, entryRow } = LAT;
   const used = new Set();
   const key = (c, r) => `${c},${r}`;
@@ -264,8 +279,17 @@ function layout(arch) {
     }
     return null;
   }
-  budget = 200000;
-  const main = extend(-1, entryRow, arch.main.length, ["right", "up", "left", "down"]);
+  // A main path that fits in one row is pushed to the right, so its last
+  // floor, the Root, is the far-right room beside the dais; the corridor from
+  // the gate just runs longer. Longer paths snake from the left instead.
+  let main;
+  if (rightAlign && arch.main.length <= cols) {
+    main = [];
+    for (let c = cols - arch.main.length; c < cols; c++) { main.push([c, entryRow]); used.add(key(c, entryRow)); }
+  } else {
+    budget = 200000;
+    main = extend(-1, entryRow, arch.main.length, ["right", "left", "up", "down"]);
+  }
   if (!main) throw new Error(`Cannot fit ${arch.main.length} main floors on the map (${cols * rows} rooms).`);
   const notes = [];
   const branches = [];
