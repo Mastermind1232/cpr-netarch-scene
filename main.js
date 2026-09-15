@@ -293,15 +293,25 @@ function layout(arch) {
 /*  Scene data                                                         */
 /* ------------------------------------------------------------------ */
 
-const px = (g) => g * G;
+/**
+ * Where the NET art sits on a canvas: the grid size and the padding offset
+ * in squares. The default is the NET scene itself. Building under another
+ * scene passes that scene's numbers, and the art scales to its grid.
+ */
+const NET_SPACE = { g: G, padX: PAD.x, padY: PAD.y };
+/** The Levels band an embedded NET occupies, in scene distance units. */
+const NET_LEVEL = { bottom: -12, top: -8, elev: -10 };
 
-function wallDoc(c, { door = 0, ds = 0, sight = 20 } = {}) {
-  return { c: c.map(px), move: 20, sight, light: sight, sound: sight, door, ds, dir: 0 };
+const X = (sp, x) => Math.round((sp.padX + x) * sp.g);
+const Y = (sp, y) => Math.round((sp.padY + y) * sp.g);
+
+function wallDoc(sp, c, { door = 0, ds = 0, sight = 20 } = {}) {
+  return { c: [X(sp, c[0]), Y(sp, c[1]), X(sp, c[2]), Y(sp, c[3])], move: 20, sight, light: sight, sound: sight, door, ds, dir: 0 };
 }
 
-function tokenDoc({ name, src, x, y, actorId = null, hostile = false, bar = null, w = 1, h = 1 }) {
+function tokenDoc(sp, { name, src, x, y, actorId = null, hostile = false, bar = null, w = 1, h = 1 }) {
   return {
-    name, x: px(x), y: px(y), width: w, height: h,
+    name, x: X(sp, x), y: Y(sp, y), width: w, height: h,
     texture: { src, fit: "contain", anchorX: 0.5, anchorY: 0.5, scaleX: 1, scaleY: 1, alphaThreshold: 0.75 },
     actorId, actorLink: false, disposition: hostile ? -1 : 0,
     displayName: 30, displayBars: bar ? 20 : 0, bar1: { attribute: bar },
@@ -309,13 +319,13 @@ function tokenDoc({ name, src, x, y, actorId = null, hostile = false, bar = null
   };
 }
 
-function tileDoc({ src, x, y, w, h, sort = 0 }) {
-  return { x: px(x), y: px(y), width: px(w), height: px(h), texture: { src, fit: "contain", anchorX: 0.5, anchorY: 0.5 }, sort, alpha: 1, hidden: false, locked: false, elevation: 0 };
+function tileDoc(sp, { src, x, y, w, h, sort = 0 }) {
+  return { x: X(sp, x), y: Y(sp, y), width: Math.round(w * sp.g), height: Math.round(h * sp.g), texture: { src, fit: "contain", anchorX: 0.5, anchorY: 0.5 }, sort, alpha: 1, hidden: false, locked: false, elevation: 0 };
 }
 
-/** Canvas grid coordinates of the room in cell (c, r), padding included. */
+/** Grid coordinates of the room in cell (c, r), measured from the backdrop's corner. */
 function roomAt([c, r]) {
-  return { x: PAD.x + LAT.x0 + ROOM * c, y: PAD.y + LAT.y0 + ROOM * r };
+  return { x: LAT.x0 + ROOM * c, y: LAT.y0 + ROOM * r };
 }
 
 function sharedEdge(a, b) {
@@ -332,13 +342,25 @@ const edgeKey = (c) => {
   return a < b ? a : b;
 };
 
+/** Levels and Wall Height flags for a document that belongs to an embedded NET. */
+function tagged(kind, doc, embed) {
+  if (!embed) return doc;
+  const { level, tag } = embed;
+  const flags = { ...(doc.flags ?? {}), [ID]: { net: tag } };
+  if (kind === "wall") flags["wall-height"] = { top: level.top, bottom: level.bottom };
+  if (kind === "tile") { flags.levels = { rangeBottom: level.bottom, rangeTop: level.top, showIfAbove: false, noCollision: false }; doc.elevation = level.bottom; }
+  if (kind === "token") doc.elevation = level.elev;
+  return { ...doc, flags };
+}
+
 /**
- * Turns a parsed architecture plus its layout into Scene.create data.
- * ids maps an ICE or Demon name to the actor id its tokens should use.
+ * Turns a parsed architecture plus its layout into Scene.create data, or,
+ * with `embed`, into documents to lay under an existing scene. ids maps an
+ * ICE or Demon name to the actor id its tokens should use.
  */
-function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = null }) {
+function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = null, sp = NET_SPACE, embed = null }) {
   const edges = new Map();
-  const setEdge = (c, opts) => { const k = edgeKey(c); if (opts.door || !edges.has(k)) edges.set(k, wallDoc(c, opts)); };
+  const setEdge = (c, opts) => { const k = edgeKey(c); if (opts.door || !edges.has(k)) edges.set(k, wallDoc(sp, c, opts)); };
 
   // A numbered floor list: main first, then each branch, in map order.
   const floors = [];
@@ -365,9 +387,9 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
   // The entry corridor: see-through side walls, an open door into floor 1.
   const E = roomAt(placed.main[0]);
   const walls = [
-    wallDoc([PAD.x, E.y, E.x, E.y], { sight: 0 }),
-    wallDoc([PAD.x, E.y + ROOM, E.x, E.y + ROOM], { sight: 0 }),
-    wallDoc([PAD.x, E.y, PAD.x, E.y + ROOM], { sight: 0 }),
+    wallDoc(sp, [0, E.y, E.x, E.y], { sight: 0 }),
+    wallDoc(sp, [0, E.y + ROOM, E.x, E.y + ROOM], { sight: 0 }),
+    wallDoc(sp, [0, E.y, 0, E.y + ROOM], { sight: 0 }),
   ];
   setEdge([E.x, E.y, E.x, E.y + ROOM], { door: 1, ds: 1 });
   walls.push(...edges.values());
@@ -379,26 +401,27 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
   for (const f of floors) {
     const R = roomAt(f.cell);
     let s = 0;
-    const place = (t) => { const [dx, dy] = slots[Math.min(s++, slots.length - 1)]; tokens.push({ ...t, x: px(R.x + dx), y: px(R.y + dy) }); };
+    const place = (t) => { const [dx, dy] = slots[Math.min(s++, slots.length - 1)]; tokens.push(tokenDoc(sp, { ...t, x: R.x + dx, y: R.y + dy })); };
     for (const it of f.items) {
       if (it.kind === "node") {
         const dv = dvOf(it);
         const file = NODE_ART[it.node] + ([6, 8, 10, 12].includes(dv) ? `DV${dv}` : "");
-        place(tokenDoc({ name: NODE_LABEL[it.node] + (dv ? ` DV${dv}` : ""), src: `${art}/${file}.webm`, x: 0, y: 0 }));
+        place({ name: NODE_LABEL[it.node] + (dv ? ` DV${dv}` : ""), src: `${art}/${file}.webm` });
       } else if (it.kind === "ice") {
-        for (let k = 0; k < it.count; k++) place(tokenDoc({ name: it.name, src: `${art}/${it.name}.webm`, x: 0, y: 0, actorId: ids[it.name] ?? null, hostile: true, bar: "stats.rez" }));
+        for (let k = 0; k < it.count; k++) place({ name: it.name, src: `${art}/${it.name}.webm`, actorId: ids[it.name] ?? null, hostile: true, bar: "stats.rez" });
       } else if (it.kind === "demon") {
-        place(tokenDoc({ name: it.name, src: `${art}/${it.name}.webm`, x: 0, y: 0, actorId: ids[it.name] ?? null, hostile: true, bar: "stats.rez" }));
+        place({ name: it.name, src: `${art}/${it.name}.webm`, actorId: ids[it.name] ?? null, hostile: true, bar: "stats.rez" });
       }
     }
   }
 
-  // Tiles: a floor number in each room's corner, and the Root under the deepest floor.
+  // Tiles: the backdrop when embedded, a floor number in each room's corner, and the Root under the deepest floor.
   const tiles = [];
+  if (embed) tiles.push(tileDoc(sp, { src: backdrop, x: 0, y: 0, w: SCENE.width / G, h: SCENE.height / G, sort: -100 }));
   for (const f of floors) {
     const R = roomAt(f.cell);
     const label = f.n <= 30 ? String(f.n) : "INFINITE";
-    tiles.push(tileDoc({ src: `${art}/NUMBERS/${label}.webm`, x: R.x + 0.05, y: R.y + 0.05, w: 0.55, h: 0.55, sort: 10 }));
+    tiles.push(tileDoc(sp, { src: `${art}/NUMBERS/${label}.webm`, x: R.x + 0.05, y: R.y + 0.05, w: 0.55, h: 0.55, sort: 10 }));
   }
   let deepest = { depth: placed.main.length, cell: placed.main[placed.main.length - 1], n: placed.main.length };
   placed.branches.forEach((b, bi) => {
@@ -408,8 +431,14 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
       deepest = { depth, cell: b.cells[b.cells.length - 1], n: first.n + b.cells.length - 1 };
     }
   });
-  { const R = roomAt(deepest.cell); tiles.push(tileDoc({ src: `${art}/Root.webm`, x: R.x, y: R.y, w: ROOM, h: ROOM, sort: 0 })); }
+  { const R = roomAt(deepest.cell); tiles.push(tileDoc(sp, { src: `${art}/Root.webm`, x: R.x, y: R.y, w: ROOM, h: ROOM, sort: 0 })); }
 
+  const record = { floors: floors.map((f) => ({ n: f.n, path: f.path, cell: f.cell, text: floorText(f) })), bottom: deepest.n, notes: placed.notes };
+  const docs = {
+    walls: walls.map((w) => tagged("wall", w, embed)),
+    tokens: tokens.map((t) => tagged("token", t, embed)),
+    tiles: tiles.map((t) => tagged("tile", t, embed)),
+  };
   const sceneData = {
     name, navigation: true,
     width: SCENE.width, height: SCENE.height, padding: PADDING,
@@ -418,10 +447,12 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
     tokenVision: true, fog: { exploration: true },
     environment: { darknessLevel: 0, globalLight: { enabled: true, alpha: 0.5, bright: false } },
     initial: { x: PAD.x * G + SCENE.width / 2, y: PAD.y * G + SCENE.height / 2, scale: 0.5 },
-    walls, tokens, tiles,
-    flags: { [ID]: { floors: floors.map((f) => ({ n: f.n, path: f.path, cell: f.cell, text: floorText(f) })), bottom: deepest.n, notes: placed.notes } },
+    walls: docs.walls, tokens: docs.tokens, tiles: docs.tiles,
+    flags: { [ID]: record },
   };
-  return { sceneData, floors, bottom: deepest.n };
+  /** The corridor square where a jacked-in runner appears, in canvas pixels. */
+  const entry = { x: X(sp, LAT.x0 - 2), y: Y(sp, LAT.y0 + ROOM * LAT.entryRow) };
+  return { sceneData, docs, floors, bottom: deepest.n, record, entry };
 }
 
 /* ------------------------------------------------------------------ */
@@ -480,6 +511,12 @@ Hooks.once("init", () => {
     scope: "world", config: true, type: String,
     default: "https://assets.forge-vtt.com/6a7ca306f6a96908b438164c/NuNu/Tiles/NetArch",
   });
+  game.keybindings.register(ID, "toggle", {
+    name: "Switch between floor and NET",
+    hint: "Jumps your view and selection between your body and your jacked-in token.",
+    editable: [{ key: "KeyN" }],
+    onDown: () => { toggleView().catch(reportErr); return true; },
+  });
 });
 
 async function ensureFolder(name) {
@@ -529,8 +566,8 @@ function summaryHtml(scene, floors, bottom, notes, arch) {
     ${stats ? `<ul style="font-size:0.85em">${stats}</ul>` : ""}</div>`;
 }
 
-/** Builds the scene from the floors text. tier sets the DV of nodes typed without one. */
-async function build({ name, tier, text, arch: rolled = null }) {
+/** Everything a build needs before any document is made: the parsed floors, their layout, the art, and the actors. */
+async function prepare({ tier, text, arch: rolled = null }) {
   const arch = parseText(text);
   if (rolled?.header) arch.header = rolled.header;
   const placed = layout(arch);
@@ -540,22 +577,187 @@ async function build({ name, tier, text, arch: rolled = null }) {
   [...arch.main, ...arch.branches.flatMap((b) => b.floors)].forEach((f) => f.items.forEach((it) => { if (it.kind !== "node") need.add(it.name); }));
   const ids = {};
   for (const nm of need) ids[nm] = (await ensureActor(nm, art)).id;
-  const { sceneData, floors, bottom } = buildSceneData(arch, placed, { name: name || "NET Architecture", backdrop, art, ids, tierDv: TIER_DV[tier] ?? null });
-  const scene = await Scene.create(sceneData);
-  try { const t = await scene.createThumbnail(); if (t?.thumb) await scene.update({ thumb: t.thumb }); } catch (err) { console.warn(`${ID} | thumbnail skipped`, err); }
+  return { arch, placed, art, backdrop, ids, need, tierDv: TIER_DV[tier] ?? null };
+}
+
+async function whisperSummary(scene, floors, bottom, notes, arch) {
   await ChatMessage.create({
-    content: summaryHtml(scene, floors, bottom, placed.notes, arch),
+    content: summaryHtml(scene, floors, bottom, notes, arch),
     whisper: ChatMessage.getWhisperRecipients("GM").map((u) => u.id),
     speaker: { alias: "NET Architecture" },
   });
+}
+
+/** Builds a new scene from the floors text. tier sets the DV of nodes typed without one. */
+async function build({ name, tier, text, arch: rolled = null }) {
+  const { arch, placed, art, backdrop, ids, need, tierDv } = await prepare({ tier, text, arch: rolled });
+  const { sceneData, floors, bottom } = buildSceneData(arch, placed, { name: name || "NET Architecture", backdrop, art, ids, tierDv });
+  const scene = await Scene.create(sceneData);
+  try { const t = await scene.createThumbnail(); if (t?.thumb) await scene.update({ thumb: t.thumb }); } catch (err) { console.warn(`${ID} | thumbnail skipped`, err); }
+  await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`${scene.name}: ${floors.length} floors, ${need.size} kinds of ICE or Demon.`);
   await scene.view();
   return scene;
 }
 
+/* ------------------------------------------------------------------ */
+/*  The NET under a scene (Levels)                                     */
+/* ------------------------------------------------------------------ */
+
+function levelsReady() {
+  return game.modules.get("levels")?.active && game.modules.get("wall-height")?.active;
+}
+
+/**
+ * Lays the architecture under the scene currently on the canvas: the
+ * backdrop as a Levels tile, walls with Wall Height ranges, tokens at the
+ * NET elevation, and a hidden access-point marker at the centre of the view.
+ */
+async function buildUnder({ tier, text, arch: rolled = null }) {
+  const scene = canvas?.scene;
+  if (!scene) throw new Error("Open the scene you want the NET under first.");
+  if (!levelsReady()) throw new Error("Building under a scene needs the Levels and Wall Height modules active.");
+  if (scene.getFlag(ID, "net")) throw new Error(`${scene.name} already has a NET under it. Remove it first.`);
+  const { arch, placed, art, backdrop, ids, need, tierDv } = await prepare({ tier, text, arch: rolled });
+
+  const g = scene.grid.size;
+  const sp = { g, padX: Math.ceil((scene.padding * scene.width) / g), padY: Math.ceil((scene.padding * scene.height) / g) };
+  const tag = foundry.utils.randomID();
+  const { docs, floors, bottom, record, entry } = buildSceneData(arch, placed, { name: scene.name, backdrop, art, ids, tierDv, sp, embed: { level: NET_LEVEL, tag } });
+
+  // The access point: hidden, at the middle of whatever the GM is looking at, dragged into place afterwards.
+  const pivot = canvas.stage.pivot;
+  const ap = tagged("token", {
+    name: "Access Point", x: Math.floor(pivot.x / g) * g, y: Math.floor(pivot.y / g) * g, width: 1, height: 1,
+    texture: { src: "icons/svg/net.svg", fit: "contain", anchorX: 0.5, anchorY: 0.5, scaleX: 1, scaleY: 1, tint: "#66ffcc" },
+    actorId: null, actorLink: false, disposition: 0, displayName: 30, displayBars: 0, hidden: true, sight: { enabled: false },
+  }, { level: { elev: 0 }, tag });
+  ap.flags[ID].accessPoint = true;
+
+  await scene.createEmbeddedDocuments("Tile", docs.tiles);
+  await scene.createEmbeddedDocuments("Wall", docs.walls);
+  await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
+  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, ...record });
+  await whisperSummary(scene, floors, bottom, placed.notes, arch);
+  ui.notifications.info(`NET laid under ${scene.name}: ${floors.length} floors at elevation ${NET_LEVEL.elev}. The access point is hidden at the centre of your view; drag it where it belongs.`);
+}
+
+/** Removes everything a build placed under the current scene, avatars included. */
+async function removeUnder() {
+  const scene = canvas?.scene;
+  const net = scene?.getFlag(ID, "net");
+  if (!net) throw new Error("This scene has no NET under it.");
+  const mine = (c) => c.filter((d) => d.getFlag(ID, "net") === net.tag).map((d) => d.id);
+  const tokens = scene.tokens.filter((t) => t.getFlag(ID, "net") === net.tag || t.getFlag(ID, "avatarOf")).map((t) => t.id);
+  if (tokens.length) await scene.deleteEmbeddedDocuments("Token", tokens);
+  const walls = mine(scene.walls); if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls);
+  const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
+  await scene.unsetFlag(ID, "net");
+  ui.notifications.info(`NET removed from ${scene.name}.`);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Jacking in and out                                                 */
+/* ------------------------------------------------------------------ */
+
+const SOCKET = `module.${ID}`;
+
+/** The jacked-in copy of a body token, if there is one. */
+const avatarOf = (scene, bodyId) => scene.tokens.find((t) => t.getFlag(ID, "avatarOf") === bodyId) ?? null;
+
+/** True when a revealed access point is within the book's six metres of the token. */
+function nearAccessPoint(token) {
+  const scene = token.parent;
+  const g = scene.grid.size;
+  const perSquare = scene.grid.distance || 2;
+  const reach = (6 / perSquare) * g + g / 2;
+  return scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && !t.hidden && Math.hypot(t.x - token.x, t.y - token.y) <= reach);
+}
+
+async function jackIn(scene, bodyId) {
+  const body = scene.tokens.get(bodyId);
+  const net = scene.getFlag(ID, "net");
+  if (!body || !net || avatarOf(scene, bodyId)) return;
+  const data = body.toObject();
+  delete data._id;
+  data.name = `${body.name} (NET)`;
+  data.x = net.entry.x; data.y = net.entry.y;
+  data.elevation = net.level.elev;
+  data.hidden = false;
+  data.sight = { ...(data.sight ?? {}), enabled: true };
+  data.flags = { ...(data.flags ?? {}), [ID]: { avatarOf: bodyId, net: net.tag } };
+  await scene.createEmbeddedDocuments("Token", [data]);
+}
+
+async function jackOut(scene, bodyId) {
+  const avatar = avatarOf(scene, bodyId);
+  if (avatar) await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
+}
+
+/** Players cannot create or delete tokens, so the GM's client does it for them. */
+async function handleSocket(msg) {
+  const scene = game.scenes.get(msg.sceneId);
+  if (!scene) return;
+  if (msg.action === "jackIn") await jackIn(scene, msg.bodyId);
+  if (msg.action === "jackOut") await jackOut(scene, msg.bodyId);
+}
+
+async function requestJack(action, scene, bodyId) {
+  const msg = { action, sceneId: scene.id, bodyId };
+  if (game.user.isGM) return handleSocket(msg);
+  if (!game.users.activeGM) return ui.notifications.warn("No GM is online to jack you in.");
+  game.socket.emit(SOCKET, msg);
+}
+
+/** The body of a token, whether it is the body itself or its avatar. */
+const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
+
+/** Switches the viewer between their body and their NET avatar. */
+async function toggleView() {
+  const scene = canvas?.scene;
+  if (!scene) return;
+  const current = canvas.tokens.controlled[0]?.document ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf"));
+  if (!current) return ui.notifications.warn("You have no token on this scene.");
+  const bodyId = bodyIdOf(current);
+  const target = current.id === bodyId ? avatarOf(scene, bodyId) : scene.tokens.get(bodyId);
+  if (!target) return ui.notifications.warn(current.id === bodyId ? "You are not jacked in." : "Your body is not on this scene.");
+  target.object?.control({ releaseOthers: true });
+  const g = scene.grid.size;
+  await canvas.animatePan({ x: target.x + (target.width * g) / 2, y: target.y + (target.height * g) / 2, duration: 250 });
+}
+
+Hooks.on("renderTokenHUD", (hud, html) => {
+  try {
+    const root = html instanceof HTMLElement ? html : html[0];
+    const token = hud.object?.document;
+    if (!root || !token || !token.isOwner) return;
+    const scene = token.parent;
+    if (!scene.getFlag(ID, "net")) return;
+    const bodyId = bodyIdOf(token);
+    const body = scene.tokens.get(bodyId);
+    if (!body || token.getFlag(ID, "accessPoint")) return;
+    const jacked = !!avatarOf(scene, bodyId);
+    if (!jacked && !nearAccessPoint(body)) return;
+    const btn = document.createElement("div");
+    btn.className = "control-icon cpr-netarch-jack";
+    btn.title = jacked ? "Jack Out" : "Jack In";
+    btn.innerHTML = `<i class="fas ${jacked ? "fa-plug-circle-xmark" : "fa-plug"}"></i>`;
+    btn.addEventListener("click", guard(async () => {
+      await requestJack(jacked ? "jackOut" : "jackIn", scene, bodyId);
+      hud.clear();
+    }));
+    (root.querySelector(".col.left") ?? root).appendChild(btn);
+  } catch (err) { console.error(`${ID} | token HUD`, err); }
+});
+
+/* ------------------------------------------------------------------ */
+/*  Dialog and hooks                                                   */
+/* ------------------------------------------------------------------ */
+
 function open() {
   if (!game.user.isGM) return ui.notifications.warn("Only the GM can build architectures.");
   const tierOpts = TIERS.map((t) => `<option value="${t}"${t === "Standard" ? " selected" : ""}>${t} (DV ${TIER_DV[t]})</option>`).join("");
+  const here = canvas?.scene?.name ?? "the current scene";
   const content = `
   <style>
     .cpr-netarch label { display:block; font-weight:bold; margin-top:6px; }
@@ -566,29 +768,28 @@ function open() {
   </style>
   <form class="cpr-netarch" autocomplete="off">
     <div class="row">
-      <div><label>Scene name</label><input type="text" name="name" value="NET Architecture"></div>
+      <div><label>Scene name (new scene only)</label><input type="text" name="name" value="NET Architecture"></div>
       <div><label>Difficulty</label><select name="tier">${tierOpts}</select></div>
       <div style="flex:0"><button type="button" data-roll title="Roll it by the book: 3d6 floors, d10 branches, Lobby and Body tables"><i class="fas fa-dice"></i> Roll by the book</button></div>
     </div>
     <label>Floors</label>
     <textarea name="floors" placeholder="Click Roll by the book and this fills in. Or type your own floors, one per line, like:&#10;1: Password DV8&#10;2: File DV8&#10;3: Hellhound x2&#10;4: Control Node DV8, Efreet&#10;Branch from 3:&#10;5: Killer&#10;6: File DV8"></textarea>
     <p class="hint">One floor per line. <code>Password DV8</code> &middot; <code>Hellhound x2</code> &middot; <code>Control Node, Efreet</code> &middot; <code>Branch from 3:</code> starts a branch.</p>
+    <p class="hint"><b>Build under ${here}</b> lays the NET beneath the open scene as a hidden Levels floor, with a hidden access point to drag into place. Needs Levels and Wall Height.</p>
   </form>`;
   let rolled = null;
+  const read = (html) => {
+    const text = html.find("[name=floors]").val();
+    if (!text.trim()) throw new Error("No floors. Roll, or type them in.");
+    return { name: html.find("[name=name]").val().trim(), tier: html.find("[name=tier]").val(), text, arch: rolled };
+  };
   new Dialog({
-    title: "NET Architecture Scene",
+    title: "NET Architecture",
     content,
     buttons: {
-      build: {
-        icon: '<i class="fas fa-hammer"></i>', label: "Build scene",
-        callback: guard(async (html) => {
-          const name = html.find("[name=name]").val().trim();
-          const tier = html.find("[name=tier]").val();
-          const text = html.find("[name=floors]").val();
-          if (!text.trim()) throw new Error("No floors. Roll, or type them in.");
-          await build({ name, tier, text, arch: rolled });
-        }),
-      },
+      build: { icon: '<i class="fas fa-hammer"></i>', label: "Build scene", callback: guard(async (html) => build(read(html))) },
+      under: { icon: '<i class="fas fa-layer-group"></i>', label: "Build under this scene", callback: guard(async (html) => buildUnder(read(html))) },
+      remove: { icon: '<i class="fas fa-trash"></i>', label: "Remove NET here", callback: guard(async () => removeUnder()) },
       cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" },
     },
     default: "build",
@@ -601,12 +802,16 @@ function open() {
       }));
       html.find("[name=floors]").on("input", () => { rolled = null; });
     },
-  }, { width: 620, resizable: true }).render(true);
+  }, { width: 680, resizable: true }).render(true);
 }
 
 Hooks.once("ready", () => {
   const mod = game.modules.get(ID);
-  if (mod) mod.api = { open, build, roll: rollArchitecture, parse: parseText, toText, layout, ICE, DEMONS };
+  if (mod) mod.api = { open, build, buildUnder, removeUnder, toggle: toggleView, roll: rollArchitecture, parse: parseText, toText, layout, ICE, DEMONS };
+  game.socket.on(SOCKET, (msg) => {
+    if (game.user !== game.users.activeGM) return;
+    handleSocket(msg).catch(reportErr);
+  });
 });
 
 Hooks.on("renderSceneDirectory", (app, html) => {
@@ -623,4 +828,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };

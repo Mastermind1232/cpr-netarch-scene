@@ -9,6 +9,7 @@ const settings = new Map();
 const game = {
   settings: { register(m, k, c) { settings.set(`${m}.${k}`, c.default); }, get(m, k) { return settings.get(`${m}.${k}`); } },
   user: { isGM: true }, modules: { get: () => ({}) }, actors: [], folders: [], packs: [],
+  keybindings: { register() {} },
 };
 const ui = { notifications: { info() {}, warn() {}, error() {} } };
 const foundry = { utils: {} };
@@ -214,6 +215,31 @@ check("T8b every room sits inside the backdrop once padding is accounted for", (
   const left = M.PAD.x * 150, top = M.PAD.y * 150, right = left + 3840, bottom = top + 2160;
   s.tokens.forEach((t) => assert(t.x >= left && t.x + 150 <= right && t.y >= top && t.y + 150 <= bottom, `token off backdrop at ${t.x},${t.y}`));
   s.walls.forEach((w) => assert(w.c[0] >= left && w.c[2] <= right && w.c[1] >= top && w.c[3] <= bottom, `wall off backdrop ${w.c}`));
+});
+
+check("T8c built under another scene: art scaled to the host grid, Levels flags on everything, entry in the corridor", () => {
+  const text = ["1: Password DV8", "2: Wisp", "3: Control Node DV8"].join("\n");
+  const arch = M.parseText(text);
+  const sp = { g: 128, padX: 8, padY: 5 };
+  const level = { bottom: -12, top: -8, elev: -10 };
+  const { docs, entry } = M.buildSceneData(arch, M.layout(arch), { name: "Floor", backdrop: BACK, art: ART, ids: { Wisp: "W1" }, sp, embed: { level, tag: "t1" } });
+  const bd = docs.tiles[0];
+  eq(bd.texture.src, BACK, "backdrop tile first");
+  eq([bd.x, bd.y, bd.width, bd.height], [8 * 128, 5 * 128, Math.round(25.6 * 128), Math.round(14.4 * 128)], "backdrop scaled to the host grid at the padded corner");
+  eq(bd.flags.levels, { rangeBottom: -12, rangeTop: -8, showIfAbove: false, noCollision: false }, "levels range on the backdrop");
+  eq(bd.elevation, -12, "tile elevation at the band's bottom");
+  docs.tiles.forEach((t) => eq(t.flags[M.ID].net, "t1", "tile tagged"));
+  docs.walls.forEach((w) => { eq(w.flags["wall-height"], { top: -8, bottom: -12 }, "wall height"); eq(w.flags[M.ID].net, "t1", "wall tagged"); });
+  docs.tokens.forEach((tk) => { eq(tk.elevation, -10, "token elevation"); eq(tk.flags[M.ID].net, "t1", "token tagged"); });
+  const right = bd.x + bd.width, bottom = bd.y + bd.height;
+  docs.tokens.forEach((tk) => assert(tk.x >= bd.x && tk.x + 128 <= right && tk.y >= bd.y && tk.y + 128 <= bottom, `token off the art at ${tk.x},${tk.y}`));
+  docs.walls.forEach((w) => assert(w.c[0] >= bd.x && w.c[2] <= right && w.c[1] >= bd.y && w.c[3] <= bottom, `wall off the art ${w.c}`));
+  eq(entry, { x: (8 + M.LAT.x0 - 2) * 128, y: (5 + M.LAT.y0 + 2 * M.LAT.entryRow) * 128 }, "corridor entry square");
+  // A wall built in NET space and one in host space describe the same room, only scaled.
+  const home = M.buildSceneData(arch, M.layout(arch), { name: "N", backdrop: BACK, art: ART, ids: { Wisp: "W1" } });
+  eq(home.docs.walls.length, docs.walls.length, "same wall count in both spaces");
+  eq(home.docs.tiles.length + 1, docs.tiles.length, "embed adds only the backdrop tile");
+  assert(!("levels" in (home.docs.tiles[0].flags ?? {})), "no Levels flags on a plain scene");
 });
 
 check("T9 roll -> text -> parse round trip keeps every floor", () => {

@@ -31,6 +31,14 @@ The scene can also be driven from a macro:
 game.modules.get("cpr-netarch-scene").api.open();
 ```
 
+## Building under a scene
+
+With the Levels and Wall Height modules active, the dialog's **Build under this scene** button lays the NET beneath the scene that is open instead of making a new one. The backdrop becomes a Levels tile between elevation -12 and -8, the room walls carry Wall Height ranges for that band, the node and ICE tokens sit at elevation -10, and a hidden **Access Point** token is placed at the centre of the GM's view, to be dragged wherever the floor's access point should be. Only a token at that elevation sees the NET; everyone else sees the floor. **Remove NET here** deletes everything a build placed, including any jacked-in tokens.
+
+Once the access point is revealed, a token owner standing within six metres of it gets a **Jack In** button on their token's right-click menu. Jack In makes a second token of that character, named with "(NET)", in the corridor at the NET elevation; the body stays where it is. The same button reads **Jack Out** while jacked in and removes the NET token. The GM's client does the creating and deleting on players' behalf, so a GM has to be online.
+
+The **N** key (rebindable under Configure Controls) switches the viewer between their body and their NET token: selection and view jump to the other one. During combat, clicking either token's name in the combat tracker does the same.
+
 ## Settings
 
 - Backdrop: path or URL of the Net Archive video.
