@@ -293,23 +293,27 @@ function layoutWith(arch, rightAlign) {
   if (!main) throw new Error(`Cannot fit ${arch.main.length} main floors on the map (${cols * rows} rooms).`);
   const notes = [];
   const branches = [];
-  for (const b of arch.branches) {
-    const order = [];
+  arch.branches.forEach((b, bi) => {
+    // Where the branch may hang: the asked-for floor first, then the other
+    // main floors after the lobby, then off an earlier branch, then floor 1.
+    const options = [];
     for (let d = 0; d < arch.main.length; d++) {
       for (const a of [b.attach - d, b.attach + d]) {
-        if (a >= 2 && a <= arch.main.length && !order.includes(a)) order.push(a);
+        if (a >= 2 && a <= arch.main.length && !options.some((o) => o.label === `floor ${a}`)) options.push({ cell: main[a - 1], label: `floor ${a}`, attach: a });
       }
     }
-    let cells = null, attach = null;
-    for (const a of order) {
+    branches.forEach((prev, pi) => prev.cells.forEach((cell) => options.push({ cell, label: `Branch ${String.fromCharCode(65 + pi)}`, attach: prev.attach })));
+    options.push({ cell: main[0], label: "floor 1", attach: 1 });
+    let cells = null, chosen = null;
+    for (const o of options) {
       budget = 200000;
-      cells = extend(main[a - 1][0], main[a - 1][1], b.floors.length, ["down", "right", "left", "up"]);
-      if (cells) { attach = a; break; }
+      cells = extend(o.cell[0], o.cell[1], b.floors.length, ["down", "right", "left", "up"]);
+      if (cells) { chosen = o; break; }
     }
     if (!cells) throw new Error(`Cannot fit a ${b.floors.length}-floor branch anywhere on the map.`);
-    if (attach !== b.attach) notes.push(`The branch from floor ${b.attach} was moved to floor ${attach} to fit the map.`);
-    branches.push({ attach, cells });
-  }
+    if (chosen.label !== `floor ${b.attach}`) notes.push(`Branch ${String.fromCharCode(65 + bi)} was moved from floor ${b.attach} to ${chosen.label} to fit the map.`);
+    branches.push({ attach: chosen.attach, attachCell: chosen.cell, attachLabel: chosen.label, cells });
+  });
   return { main, branches, notes };
 }
 
@@ -392,7 +396,7 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
   arch.main.forEach((f, i) => floors.push({ n: ++n, path: "Main", cell: placed.main[i], items: f.items }));
   placed.branches.forEach((b, bi) => {
     const src = arch.branches[bi];
-    src.floors.forEach((f, i) => floors.push({ n: ++n, path: `Branch ${String.fromCharCode(65 + bi)} (off floor ${b.attach})`, cell: b.cells[i], items: f.items }));
+    src.floors.forEach((f, i) => floors.push({ n: ++n, path: `Branch ${String.fromCharCode(65 + bi)} (off ${b.attachLabel ?? `floor ${b.attach}`})`, cell: b.cells[i], items: f.items }));
   });
 
   // Every room is walled on four sides.
@@ -406,7 +410,7 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
   // Consecutive floors share a closed door.
   const chain = (cells) => { for (let i = 1; i < cells.length; i++) setEdge(sharedEdge(cells[i - 1], cells[i]), { door: 1, ds: 0 }); };
   chain(placed.main);
-  placed.branches.forEach((b) => chain([placed.main[b.attach - 1], ...b.cells]));
+  placed.branches.forEach((b) => chain([b.attachCell ?? placed.main[b.attach - 1], ...b.cells]));
 
   // The entry corridor: see-through side walls, an open door into floor 1.
   const E = roomAt(placed.main[0]);

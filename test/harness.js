@@ -133,7 +133,7 @@ check("T5 layout: every rolled architecture fits, rooms unique and chained", () 
     } else eq(p.main[0], [0, M.LAT.entryRow], "long or boxed-in paths start at the gate");
     for (let i = 1; i < p.main.length; i++) assert(adjacent(p.main[i - 1], p.main[i]), "main chain broken");
     p.branches.forEach((b, i) => {
-      assert(adjacent(p.main[b.attach - 1], b.cells[0]), "branch not attached");
+      assert(adjacent(b.attachCell ?? p.main[b.attach - 1], b.cells[0]), "branch not attached");
       for (let k = 1; k < b.cells.length; k++) assert(adjacent(b.cells[k - 1], b.cells[k]), "branch chain broken");
       eq(b.cells.length, a.branches[i].floors.length, "branch length");
     });
