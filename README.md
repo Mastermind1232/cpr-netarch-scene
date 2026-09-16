@@ -15,7 +15,7 @@ A Foundry VTT module for the Cyberpunk RED system. It builds a new scene for a N
 
 ## Using it
 
-Open the Scenes tab and click "NET Architecture". Set a scene name and a difficulty. Either click Roll, which fills the floors box by the rulebook's method (3d6 floors, 1d10 per branch with 7 or higher branching, the Lobby table for floors 1 and 2, the Body table for the rest, with repeated Programs and Passwords rerolled), or type the floors by hand. Edit the box as needed, then click Build scene.
+Open the Scenes tab and click "NET Architecture". Set a scene name and a difficulty. Either click Roll, which fills the floor list by the rulebook's method (3d6 floors, 1d10 per branch with 7 or higher branching, the Lobby table for floors 1 and 2, the Body table for the rest, with repeated Programs and Passwords rerolled), or build the list by hand: add a floor, pick what is on it from the dropdown, give a node a DV or leave it to the difficulty, add more pieces to the same floor, add a branch. Tick "edit as text" to work in the line format below instead. Then click Build scene, or Build under this scene.
 
 One floor per line. A line holds any of these, separated by commas:
 

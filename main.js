@@ -782,6 +782,61 @@ Hooks.on("renderTokenHUD", (hud, html) => {
 /*  Dialog and hooks                                                   */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/*  The floors editor                                                  */
+/* ------------------------------------------------------------------ */
+
+const KIND_OPTIONS = [
+  ["password", "Password"], ["file", "File"], ["control", "Control Node"],
+  ...Object.keys(ICE).map((n) => [`ice:${n}`, `${n} (ICE)`]),
+  ...Object.keys(DEMONS).map((n) => [`demon:${n}`, `${n} (Demon)`]),
+];
+const itemKey = (it) => (it.kind === "node" ? it.node : `${it.kind}:${it.name}`);
+function itemFromKey(key, old = {}) {
+  if (key.startsWith("ice:")) return { kind: "ice", name: key.slice(4), count: old.count ?? 1 };
+  if (key.startsWith("demon:")) return { kind: "demon", name: key.slice(6) };
+  return { kind: "node", node: key, dv: old.dv ?? null };
+}
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/** One floor row: its items as dropdowns, and the buttons that shape it. */
+function floorRow(n, floor, path) {
+  const items = floor.items.map((it, ii) => {
+    const key = itemKey(it);
+    const opts = KIND_OPTIONS.map(([k, l]) => `<option value="${k}"${k === key ? " selected" : ""}>${l}</option>`).join("");
+    const dv = it.kind === "node"
+      ? `<select data-dv data-path="${path}" data-item="${ii}" title="DV; blank uses the difficulty's">${["", 6, 8, 10, 12].map((d) => `<option value="${d}"${String(it.dv ?? "") === String(d) ? " selected" : ""}>${d === "" ? "DV (tier)" : `DV ${d}`}</option>`).join("")}</select>`
+      : "";
+    const count = it.kind === "ice"
+      ? `<input type="number" min="1" max="9" data-count data-path="${path}" data-item="${ii}" value="${it.count ?? 1}" title="How many" style="width:44px">`
+      : "";
+    return `<span class="item"><select data-kind data-path="${path}" data-item="${ii}">${opts}</select>${dv}${count}<a data-del-item data-path="${path}" data-item="${ii}" title="Remove this piece"><i class="fas fa-times"></i></a></span>`;
+  }).join("");
+  return `<div class="floor"><span class="num">${n}</span>${items}
+    <a data-add-item data-path="${path}" title="Add another piece to this floor"><i class="fas fa-plus"></i></a>
+    <span class="tools"><a data-up data-path="${path}" title="Move up"><i class="fas fa-arrow-up"></i></a><a data-down data-path="${path}" title="Move down"><i class="fas fa-arrow-down"></i></a><a data-del-floor data-path="${path}" title="Remove floor"><i class="fas fa-trash"></i></a></span></div>`;
+}
+
+function renderRows(state) {
+  let n = 0;
+  const main = state.main.map((f, i) => floorRow(++n, f, `m.${i}`)).join("");
+  const branches = state.branches.map((b, bi) => {
+    const rows = b.floors.map((f, i) => floorRow(++n, f, `b${bi}.${i}`)).join("");
+    return `<div class="branch"><div class="bhead">Branch ${String.fromCharCode(65 + bi)} from floor
+      <input type="number" min="2" data-attach data-branch="${bi}" value="${b.attach}" style="width:48px">
+      <a data-add-floor data-branch="${bi}" title="Add a floor to this branch"><i class="fas fa-plus"></i> floor</a>
+      <a data-del-branch data-branch="${bi}" title="Remove this branch"><i class="fas fa-trash"></i></a></div>${rows}</div>`;
+  }).join("");
+  return `${main}<div class="bhead"><a data-add-floor data-branch="-1"><i class="fas fa-plus"></i> floor</a> <a data-add-branch><i class="fas fa-code-branch"></i> branch</a></div>${branches}`;
+}
+
+/** Resolves a data-path like "m.2" or "b0.1" to the floor list and index it names. */
+function floorAt(state, path) {
+  const [g, i] = path.split(".");
+  const list = g === "m" ? state.main : state.branches[Number(g.slice(1))].floors;
+  return { list, i: Number(i) };
+}
+
 function open() {
   if (!game.user.isGM) return ui.notifications.warn("Only the GM can build architectures.");
   const tierOpts = TIERS.map((t) => `<option value="${t}"${t === "Standard" ? " selected" : ""}>${t} (DV ${TIER_DV[t]})</option>`).join("");
@@ -791,7 +846,17 @@ function open() {
     .cpr-netarch label { display:block; font-weight:bold; margin-top:6px; }
     .cpr-netarch .row { display:flex; gap:8px; align-items:flex-end; }
     .cpr-netarch .row > div { flex:1; }
-    .cpr-netarch textarea { width:100%; min-height:260px; font-family:monospace; font-size:12px; white-space:pre; }
+    .cpr-netarch .floors { border:1px solid #999; border-radius:4px; padding:6px; min-height:120px; max-height:340px; overflow:auto; background:rgba(0,0,0,0.04); }
+    .cpr-netarch .floor { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:3px 2px; border-bottom:1px solid rgba(0,0,0,0.1); }
+    .cpr-netarch .floor .num { display:inline-block; min-width:22px; font-weight:bold; text-align:right; margin-right:4px; }
+    .cpr-netarch .item { display:inline-flex; align-items:center; gap:2px; background:rgba(0,0,0,0.06); border-radius:3px; padding:1px 3px; }
+    .cpr-netarch .item select { width:auto; height:24px; font-size:12px; }
+    .cpr-netarch .floor a, .cpr-netarch .bhead a { cursor:pointer; padding:0 4px; opacity:0.7; }
+    .cpr-netarch .floor a:hover, .cpr-netarch .bhead a:hover { opacity:1; }
+    .cpr-netarch .tools { margin-left:auto; white-space:nowrap; }
+    .cpr-netarch .branch { margin-top:6px; border-left:3px solid #888; padding-left:6px; }
+    .cpr-netarch .bhead { font-weight:bold; padding:4px 2px; }
+    .cpr-netarch textarea { width:100%; min-height:120px; font-family:monospace; font-size:12px; white-space:pre; }
     .cpr-netarch .hint { font-size:11px; opacity:0.8; margin:4px 0 0; }
   </style>
   <form class="cpr-netarch" autocomplete="off">
@@ -800,17 +865,22 @@ function open() {
       <div><label>Difficulty</label><select name="tier">${tierOpts}</select></div>
       <div style="flex:0"><button type="button" data-roll title="Roll it by the book: 3d6 floors, d10 branches, Lobby and Body tables"><i class="fas fa-dice"></i> Roll by the book</button></div>
     </div>
-    <label>Floors</label>
-    <textarea name="floors" placeholder="Click Roll by the book and this fills in. Or type your own floors, one per line, like:&#10;1: Password DV8&#10;2: File DV8&#10;3: Hellhound x2&#10;4: Control Node DV8, Efreet&#10;Branch from 3:&#10;5: Killer&#10;6: File DV8"></textarea>
-    <p class="hint">One floor per line. <code>Password DV8</code> &middot; <code>Hellhound x2</code> &middot; <code>Control Node, Efreet</code> &middot; <code>Branch from 3:</code> starts a branch.</p>
-    <p class="hint"><b>Build under ${here}</b> lays the NET beneath the open scene as a hidden Levels floor, with a hidden access point to drag into place. Needs Levels and Wall Height.</p>
+    <label>Floors <span style="font-weight:normal;font-size:11px;margin-left:8px"><input type="checkbox" name="astext" style="vertical-align:middle"> edit as text</span></label>
+    <div class="floors"></div>
+    <textarea name="floors" style="display:none"></textarea>
+    <p class="hint">A floor holds one or more pieces. Password, File or Control Node take a DV; leave it blank to use the difficulty's. <b>Build under ${here}</b> lays the NET beneath the open scene as a hidden Levels floor. Needs Levels and Wall Height.</p>
   </form>`;
-  let rolled = null;
+
+  const state = { main: [], branches: [], header: null };
+  const toStateText = () => toText({ main: state.main, branches: state.branches }, state.header ?? []);
+
   const read = (html) => {
-    const text = html.find("[name=floors]").val();
-    if (!text.trim()) throw new Error("No floors. Roll, or type them in.");
-    return { name: html.find("[name=name]").val().trim(), tier: html.find("[name=tier]").val(), text, arch: rolled };
+    const asText = html.find("[name=astext]").prop("checked");
+    const text = asText ? html.find("[name=floors]").val() : toStateText();
+    if (!text.trim()) throw new Error("No floors. Roll, or add some.");
+    return { name: html.find("[name=name]").val().trim(), tier: html.find("[name=tier]").val(), text, arch: state.header ? { header: state.header } : null };
   };
+
   new Dialog({
     title: "NET Architecture",
     content,
@@ -822,15 +892,61 @@ function open() {
     },
     default: "build",
     render: (html) => {
+      const box = html.find(".floors");
+      const ta = html.find("[name=floors]");
+      const draw = () => { box.html(renderRows(state)); ta.val(toStateText()); };
+      draw();
+
       html.find("[data-roll]").on("click", guard(async (ev) => {
         ev.preventDefault();
-        const tier = html.find("[name=tier]").val();
-        rolled = rollArchitecture(tier);
-        html.find("[name=floors]").val(toText(rolled, rolled.header));
+        const rolled = rollArchitecture(html.find("[name=tier]").val());
+        state.main = rolled.main; state.branches = rolled.branches; state.header = rolled.header;
+        html.find("[name=astext]").prop("checked", false); box.show(); ta.hide();
+        draw();
       }));
-      html.find("[name=floors]").on("input", () => { rolled = null; });
+
+      html.find("[name=astext]").on("change", guard(async (ev) => {
+        if (ev.currentTarget.checked) { ta.val(toStateText()); box.hide(); ta.show(); return; }
+        const parsed = parseText(ta.val() || "");
+        state.main = parsed.main; state.branches = parsed.branches; state.header = null;
+        box.show(); ta.hide(); draw();
+      }));
+
+      const touch = () => { state.header = null; draw(); };
+      box.on("change", "[data-kind]", (ev) => {
+        const el = ev.currentTarget; const { list, i } = floorAt(state, el.dataset.path);
+        list[i].items[Number(el.dataset.item)] = itemFromKey(el.value, list[i].items[Number(el.dataset.item)]); touch();
+      });
+      box.on("change", "[data-dv]", (ev) => {
+        const el = ev.currentTarget; const { list, i } = floorAt(state, el.dataset.path);
+        list[i].items[Number(el.dataset.item)].dv = el.value ? Number(el.value) : null; touch();
+      });
+      box.on("change", "[data-count]", (ev) => {
+        const el = ev.currentTarget; const { list, i } = floorAt(state, el.dataset.path);
+        list[i].items[Number(el.dataset.item)].count = Math.max(1, Number(el.value) || 1); touch();
+      });
+      box.on("change", "[data-attach]", (ev) => {
+        const el = ev.currentTarget; state.branches[Number(el.dataset.branch)].attach = Math.max(2, Number(el.value) || 2); touch();
+      });
+      box.on("click", "[data-add-item]", (ev) => {
+        const { list, i } = floorAt(state, ev.currentTarget.dataset.path); list[i].items.push({ kind: "ice", name: "Wisp", count: 1 }); touch();
+      });
+      box.on("click", "[data-del-item]", (ev) => {
+        const el = ev.currentTarget; const { list, i } = floorAt(state, el.dataset.path);
+        list[i].items.splice(Number(el.dataset.item), 1); if (!list[i].items.length) list.splice(i, 1); touch();
+      });
+      box.on("click", "[data-del-floor]", (ev) => { const { list, i } = floorAt(state, ev.currentTarget.dataset.path); list.splice(i, 1); touch(); });
+      box.on("click", "[data-up]", (ev) => { const { list, i } = floorAt(state, ev.currentTarget.dataset.path); if (i > 0) { [list[i - 1], list[i]] = [list[i], list[i - 1]]; touch(); } });
+      box.on("click", "[data-down]", (ev) => { const { list, i } = floorAt(state, ev.currentTarget.dataset.path); if (i < list.length - 1) { [list[i + 1], list[i]] = [list[i], list[i + 1]]; touch(); } });
+      box.on("click", "[data-add-floor]", (ev) => {
+        const bi = Number(ev.currentTarget.dataset.branch);
+        const list = bi < 0 ? state.main : state.branches[bi].floors;
+        list.push({ items: [{ kind: "node", node: "password", dv: null }] }); touch();
+      });
+      box.on("click", "[data-add-branch]", () => { state.branches.push({ attach: Math.max(2, Math.min(state.main.length, 2)), floors: [{ items: [{ kind: "ice", name: "Wisp", count: 1 }] }] }); touch(); });
+      box.on("click", "[data-del-branch]", (ev) => { state.branches.splice(Number(ev.currentTarget.dataset.branch), 1); touch(); });
     },
-  }, { width: 680, resizable: true }).render(true);
+  }, { width: 720, height: "auto", resizable: true }).render(true);
 }
 
 Hooks.once("ready", () => {

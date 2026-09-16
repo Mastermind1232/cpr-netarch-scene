@@ -2,7 +2,7 @@
   "id": "cpr-netarch-scene",
   "title": "NET Architecture Scene Builder",
   "description": "Builds a new scene for a Cyberpunk RED NET Architecture on the S0L Net Archive backdrop: one walled room per floor, closed doors between floors, branches, node tokens with DV art, and Black ICE and Demon tokens backed by real actors created from the core rulebook's tables. Floors can be rolled by the book or typed by hand.",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "authors": [
     {
       "name": "Adam Meehan"
@@ -28,5 +28,5 @@
   "license": "MIT",
   "url": "https://github.com/Mastermind1232/cpr-netarch-scene",
   "manifest": "https://raw.githubusercontent.com/Mastermind1232/cpr-netarch-scene/main/module.json",
-  "download": "https://github.com/Mastermind1232/cpr-netarch-scene/releases/download/v1.1.2/module.zip"
+  "download": "https://github.com/Mastermind1232/cpr-netarch-scene/releases/download/v1.2.0/module.zip"
 }
