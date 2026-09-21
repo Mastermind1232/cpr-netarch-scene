@@ -127,11 +127,15 @@ check("T5 layout: every rolled architecture fits, rooms unique and chained", () 
     assert(keys.size === cells.length, "rooms overlap");
     cells.forEach(([c, r]) => assert(c >= 0 && c < M.LAT.cols && r >= 0 && r < M.LAT.rows, `off lattice ${c},${r}`));
     const fellBack = p.notes.some((n) => /starts at the gate/.test(n));
+    eq(p.main[0], [a.main.length === 1 && !fellBack ? M.LAT.cols - 1 : 0, M.LAT.entryRow], "paths start at the gate (a lone Root sits by the dais)");
     if (a.main.length <= M.LAT.cols && !fellBack) {
-      eq(p.main[0], [M.LAT.cols - a.main.length, M.LAT.entryRow], "short paths are pushed to the right");
-      eq(p.main[p.main.length - 1], [M.LAT.cols - 1, M.LAT.entryRow], "and end in the far-right room");
-    } else eq(p.main[0], [0, M.LAT.entryRow], "long or boxed-in paths start at the gate");
-    for (let i = 1; i < p.main.length; i++) assert(adjacent(p.main[i - 1], p.main[i]), "main chain broken");
+      eq(p.main[p.main.length - 1], [M.LAT.cols - 1, M.LAT.entryRow], "short paths end in the far-right room");
+      for (let i = 1; i < p.main.length - 1; i++) assert(adjacent(p.main[i - 1], p.main[i]), "main chain broken");
+      const last = p.main[p.main.length - 1], prev = p.main[p.main.length - 2];
+      if (prev) assert(prev[1] === last[1] && last[0] > prev[0], "the Root is reached along the entry row");
+      const row = p.branches.flatMap((b) => b.cells).filter(([c, r]) => r === M.LAT.entryRow && prev && c > prev[0] && c < last[0]);
+      eq(row.length, 0, "no branch room sits in the corridor to the Root");
+    } else for (let i = 1; i < p.main.length; i++) assert(adjacent(p.main[i - 1], p.main[i]), "main chain broken");
     p.branches.forEach((b, i) => {
       assert(adjacent(b.attachCell ?? p.main[b.attach - 1], b.cells[0]), "branch not attached");
       for (let k = 1; k < b.cells.length; k++) assert(adjacent(b.cells[k - 1], b.cells[k]), "branch chain broken");
@@ -150,10 +154,10 @@ check("T6 layout: an 18-floor main snakes along the entry row and back on the ro
   eq(p.main[9], [8, e - 1], "goes up");
 });
 
-check("T6b layout: a 5-floor main sits in the right five rooms of the entry row", () => {
+check("T6b layout: a 5-floor main starts at the gate and its Root sits by the dais", () => {
   const a = M.parseText(Array.from({ length: 5 }, (_, i) => `${i + 1}: File`).join("\n"));
   const p = M.layout(a);
-  eq(p.main, [[4, 2], [5, 2], [6, 2], [7, 2], [8, 2]], "columns 4..8 on the entry row");
+  eq(p.main, [[0, 2], [1, 2], [2, 2], [3, 2], [8, 2]], "columns 0..3, then the far-right room");
 });
 
 check("T7 layout: crowded branches fit, a blocked attach point moves and says so", () => {
@@ -180,8 +184,8 @@ check("T8 scene data: walls, doors, tokens, tiles, root", () => {
   eq(floors.length, 11, "11 floors");
   eq(s.grid.size, 150, "grid"); eq([s.width, s.height], [3840, 2160], "size"); eq(s.background.src, BACK, "backdrop");
   const doors = s.walls.filter((w) => w.door === 1);
-  eq(doors.length, (5 - 1) + 2 + 4 + 1, "doors: main links + branch links + entry");
-  eq(doors.filter((w) => w.ds === 1).length, 1, "only the entry door is open");
+  eq(doors.length, (5 - 1) + 2 + 4 + 1 + 1, "doors: main links + branch links + entry + the open passage into the Root");
+  eq(doors.filter((w) => w.ds === 1).length, 2, "only the entry door and the Root passage are open");
   const keys = s.walls.map((w) => w.c.join(","));
   assert(new Set(keys).size === keys.length, "duplicate walls");
   s.walls.forEach((w) => assert(w.c.every((v) => v % 150 === 0), "wall off grid"));

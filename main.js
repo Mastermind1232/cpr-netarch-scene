@@ -279,13 +279,15 @@ function layoutWith(arch, rightAlign) {
     }
     return null;
   }
-  // A main path that fits in one row is pushed to the right, so its last
-  // floor, the Root, is the far-right room beside the dais; the corridor from
-  // the gate just runs longer. Longer paths snake from the left instead.
+  // A main path that fits in one row starts at the gate, and its last floor,
+  // the Root, is the far-right room beside the dais. The row between them is
+  // a corridor, kept clear of branches. Longer paths snake from the left.
   let main;
   if (rightAlign && arch.main.length <= cols) {
     main = [];
-    for (let c = cols - arch.main.length; c < cols; c++) { main.push([c, entryRow]); used.add(key(c, entryRow)); }
+    for (let c = 0; c < arch.main.length - 1; c++) { main.push([c, entryRow]); used.add(key(c, entryRow)); }
+    main.push([cols - 1, entryRow]);
+    for (let c = arch.main.length - 1; c < cols; c++) used.add(key(c, entryRow));
   } else {
     budget = 200000;
     main = extend(-1, entryRow, arch.main.length, ["right", "left", "up", "down"]);
@@ -410,8 +412,21 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
     setEdge([R.x, R.y, R.x, R.y + ROOM], {});
     setEdge([R.x + ROOM, R.y, R.x + ROOM, R.y + ROOM], {});
   }
-  // Consecutive floors share a closed door.
-  const chain = (cells) => { for (let i = 1; i < cells.length; i++) setEdge(sharedEdge(cells[i - 1], cells[i]), { door: 1, ds: 0 }); };
+  // Consecutive floors share a closed door. Floors in the same row with rooms
+  // between them are joined by a walled corridor: a closed door out of the
+  // earlier floor, open passage into the later one.
+  const chain = (cells) => {
+    for (let i = 1; i < cells.length; i++) {
+      const a = cells[i - 1], b = cells[i];
+      if (a[1] === b[1] && b[0] > a[0] + 1) {
+        const A = roomAt(a), B = roomAt(b);
+        setEdge([A.x + ROOM, A.y, A.x + ROOM, A.y + ROOM], { door: 1, ds: 0 });
+        setEdge([B.x, B.y, B.x, B.y + ROOM], { door: 1, ds: 1 });
+        setEdge([A.x + ROOM, A.y, B.x, A.y], {});
+        setEdge([A.x + ROOM, A.y + ROOM, B.x, A.y + ROOM], {});
+      } else setEdge(sharedEdge(a, b), { door: 1, ds: 0 });
+    }
+  };
   chain(placed.main);
   placed.branches.forEach((b) => chain([b.attachCell ?? placed.main[b.attach - 1], ...b.cells]));
 
