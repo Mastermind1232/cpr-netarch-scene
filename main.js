@@ -547,7 +547,7 @@ Hooks.once("init", () => {
   });
   game.keybindings.register(ID, "scan", {
     name: "Scanner",
-    hint: "The Scanner Meat Action: Interface + 1d10 against DV 9 (set per scene in the NET flag). A success reveals the nearest hidden access point.",
+    hint: "The Scanner Meat Action: Interface + 1d10 against DV 6 (set per scene in the NET flag). A success reveals the nearest hidden access point.",
     editable: [{ key: "KeyS", modifiers: ["Shift"] }],
     onDown: () => { scanner().catch(reportErr); return true; },
   });
@@ -671,7 +671,7 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   await scene.createEmbeddedDocuments("Tile", docs.tiles);
   await scene.createEmbeddedDocuments("Wall", docs.walls);
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
-  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, scanDv: 9, ...record });
+  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, scanDv: 6, ...record });
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`NET laid under ${scene.name}: ${floors.length} floors at elevation ${NET_LEVEL.elev}. The access point is hidden at the centre of your view; drag it where it belongs.`);
 }
@@ -687,7 +687,6 @@ async function removeUnder() {
   const walls = mine(scene.walls); if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls);
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
   await scene.unsetFlag(ID, "net");
-  await scene.unsetFlag(ID, "scannedBy");
   ui.notifications.info(`NET removed from ${scene.name}.`);
 }
 
@@ -739,10 +738,6 @@ async function handleSocket(msg) {
   if (!scene) return;
   if (msg.action === "jackIn") await jackIn(scene, msg.bodyId);
   if (msg.action === "jackOut") await jackOut(scene, msg.bodyId);
-  if (msg.action === "scanned") {
-    const list = scene.getFlag(ID, "scannedBy") ?? [];
-    if (!list.includes(msg.key)) await scene.setFlag(ID, "scannedBy", [...list, msg.key]);
-  }
   if (msg.action === "reveal") {
     const t = scene.tokens.get(msg.tokenId);
     if (!t?.getFlag(ID, "accessPoint")) return;
@@ -765,7 +760,7 @@ const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
 function scanDv(scene) {
   const net = scene.getFlag(ID, "net");
   if (!net) return null;
-  return Number.isInteger(net.scanDv) ? net.scanDv : 9;
+  return Number.isInteger(net.scanDv) ? net.scanDv : 6;
 }
 
 /** A Cyberpunk RED check die: d10, exploding on a 10, imploding on a 1. */
@@ -829,13 +824,7 @@ async function scanner() {
   const name = actor?.name ?? token.name;
   const result = ok ? (found ? `There is an access point within ${dist} metres.` : `Nothing here they have not already found.`) : `Unable to identify nearby access points.`;
   const line = `<b>${name} uses their Scanner.</b> ${result}`;
-  const scannedBy = scene.getFlag(ID, "scannedBy") ?? [];
-  const key = actor?.id ?? token.id;
-  if (!scannedBy.includes(key)) {
-    await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor, token }), content: `<div class="cpr-netarch-scan">${line}</div>` });
-    if (game.user.isGM) await scene.setFlag(ID, "scannedBy", [...scannedBy, key]);
-    else game.socket.emit(SOCKET, { action: "scanned", sceneId: scene.id, key });
-  } else ui.notifications.info(line.replace(/<[^>]+>/g, ""));
+  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor, token }), content: `<div class="cpr-netarch-scan">${line}</div>` });
   if (!found) return;
   const msg = { action: "reveal", sceneId: scene.id, tokenId: found.id };
   if (game.user.isGM) return handleSocket(msg);
