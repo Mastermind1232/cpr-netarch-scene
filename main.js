@@ -542,8 +542,14 @@ Hooks.once("init", () => {
   game.keybindings.register(ID, "toggle", {
     name: "Switch between floor and NET",
     hint: "Jumps your view and selection between your body and your jacked-in token.",
-    editable: [{ key: "KeyJ" }],
+    editable: [{ key: "KeyJ", modifiers: ["Shift"] }],
     onDown: () => { toggleView().catch(reportErr); return true; },
+  });
+  game.keybindings.register(ID, "scan", {
+    name: "Scanner",
+    hint: "The Scanner Meat Action: Interface + 1d10 against the architecture's DV. A success reveals the nearest hidden access point.",
+    editable: [{ key: "KeyS", modifiers: ["Shift"] }],
+    onDown: () => { scanner().catch(reportErr); return true; },
   });
 });
 
@@ -665,7 +671,7 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   await scene.createEmbeddedDocuments("Tile", docs.tiles);
   await scene.createEmbeddedDocuments("Wall", docs.walls);
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
-  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, ...record });
+  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, scanDv: tierDv ?? null, ...record });
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`NET laid under ${scene.name}: ${floors.length} floors at elevation ${NET_LEVEL.elev}. The access point is hidden at the centre of your view; drag it where it belongs.`);
 }
@@ -728,6 +734,10 @@ async function handleSocket(msg) {
   if (!scene) return;
   if (msg.action === "jackIn") await jackIn(scene, msg.bodyId);
   if (msg.action === "jackOut") await jackOut(scene, msg.bodyId);
+  if (msg.action === "reveal") {
+    const t = scene.tokens.get(msg.tokenId);
+    if (t?.getFlag(ID, "accessPoint") && t.hidden) await t.update({ hidden: false });
+  }
 }
 
 async function requestJack(action, scene, bodyId) {
@@ -739,6 +749,53 @@ async function requestJack(action, scene, bodyId) {
 
 /** The body of a token, whether it is the body itself or its avatar. */
 const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
+
+/** The DV a Scanner check needs here: the architecture's tier DV, read from the build record. */
+function scanDv(scene) {
+  const net = scene.getFlag(ID, "net");
+  if (!net) return null;
+  if (Number.isInteger(net.scanDv)) return net.scanDv;
+  for (const f of net.floors ?? []) { const m = /DV\s*(\d+)/i.exec(f.text ?? ""); if (m) return Number(m[1]); }
+  return 8;
+}
+
+/** A Cyberpunk RED check die: d10, exploding on a 10, imploding on a 1. */
+async function checkDie() {
+  const first = await new Roll("1d10").evaluate();
+  let total = first.total, note = "";
+  if (first.total === 10) { const r = await new Roll("1d10").evaluate(); total += r.total; note = ` (10, +${r.total})`; }
+  else if (first.total === 1) { const r = await new Roll("1d10").evaluate(); total -= r.total; note = ` (1, −${r.total})`; }
+  return { total, note };
+}
+
+/** The Scanner Meat Action: Interface + 1d10 against the architecture's DV. Success reveals the nearest hidden access point. */
+async function scanner() {
+  const scene = canvas?.scene;
+  if (!scene?.getFlag(ID, "net")) return ui.notifications.warn("There is no NET architecture under this scene.");
+  const token = canvas.tokens.controlled[0]?.document ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf") && !t.getFlag(ID, "accessPoint"));
+  if (!token) return ui.notifications.warn("Select your token first.");
+  if (token.getFlag(ID, "avatarOf")) return ui.notifications.warn("Scanner is a Meat Action. Do it from your body, not the NET.");
+  const actor = token.actor;
+  const role = actor?.items?.find((i) => i.type === "role" && (String(i.system?.mainRoleAbility ?? "").toLowerCase() === "interface" || /netrunner/i.test(i.name)));
+  const rank = Number(role?.system?.rank) || 0;
+  if (!role) return ui.notifications.warn(`${actor?.name ?? "This token"} has no Netrunner role to Scan with.`);
+  const dv = scanDv(scene);
+  const hidden = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && t.hidden)
+    .sort((a, b) => Math.hypot(a.x - token.x, a.y - token.y) - Math.hypot(b.x - token.x, b.y - token.y));
+  const die = await checkDie();
+  const total = rank + die.total, ok = total > dv;
+  const found = ok && hidden.length ? hidden[0] : null;
+  const g = scene.grid.size, per = scene.grid.distance || 2;
+  const dist = found ? Math.round((Math.hypot(found.x - token.x, found.y - token.y) / g) * per) : 0;
+  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content:
+    `<div class="cpr-netarch-scan"><b>Scanner</b> · Interface ${rank} + d10 ${die.total}${die.note} = <b>${total}</b> vs DV ${dv}: ` +
+    (ok ? (found ? `<b>success.</b> An access point, about ${dist} m away.` : `<b>success.</b> Nothing new in range.`) : `<b>failure.</b>`) + `</div>` });
+  if (!found) return;
+  const msg = { action: "reveal", sceneId: scene.id, tokenId: found.id };
+  if (game.user.isGM) return handleSocket(msg);
+  if (!game.users.activeGM) return ui.notifications.warn("No GM is online to reveal what you found.");
+  game.socket.emit(SOCKET, msg);
+}
 
 /** Switches the viewer between their body and their NET avatar. */
 async function toggleView() {
@@ -767,6 +824,14 @@ Hooks.on("renderTokenHUD", (hud, html) => {
     const body = scene.tokens.get(bodyId);
     if (!body || token.getFlag(ID, "accessPoint")) return;
     const jacked = !!avatarOf(scene, bodyId);
+    if (!jacked && token.id === bodyId && scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && t.hidden)) {
+      const sb = document.createElement("div");
+      sb.className = "control-icon cpr-netarch-scan";
+      sb.title = "Scanner (Shift+S)";
+      sb.innerHTML = `<i class="fas fa-satellite-dish"></i>`;
+      sb.addEventListener("click", guard(async () => { await scanner(); hud.clear(); }));
+      (root.querySelector(".col.left") ?? root).appendChild(sb);
+    }
     if (!jacked && !nearAccessPoint(body)) return;
     const btn = document.createElement("div");
     btn.className = "control-icon cpr-netarch-jack";

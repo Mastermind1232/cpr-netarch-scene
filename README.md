@@ -49,3 +49,7 @@ The **N** key (rebindable under Configure Controls) switches the viewer between 
 ```
 node test/harness.js
 ```
+
+## Scanner
+
+Shift+S (or the dish button on the token HUD) is the Scanner Meat Action: Interface + 1d10, exploding on a 10 and imploding on a 1, against the architecture's tier DV. The roll goes to chat. On a success the nearest hidden access point is revealed. The check must be made from the body, not the NET avatar.
