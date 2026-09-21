@@ -52,4 +52,4 @@ node test/harness.js
 
 ## Scanner
 
-Shift+S (or the dish button on the token HUD) is the Scanner Meat Action: Interface + 1d10, exploding on a 10 and imploding on a 1, against the architecture's tier DV. The roll goes to chat. On a success the nearest hidden access point is revealed and a map pin is dropped on it, so the runner sees where it is even through walls. The check must be made from the body, not the NET avatar.
+Shift+S (or the dish button on the token HUD) is the Scanner Meat Action: Interface + 1d10, exploding on a 10 and imploding on a 1, against the architecture's tier DV. The roll goes to chat. On a success the nearest hidden access point is revealed and marked as scanned, which makes it visible through walls: Scanner gives the location, not a view. The check must be made from the body, not the NET avatar.

@@ -686,7 +686,6 @@ async function removeUnder() {
   if (tokens.length) await scene.deleteEmbeddedDocuments("Token", tokens);
   const walls = mine(scene.walls); if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls);
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
-  const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id); if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins);
   await scene.unsetFlag(ID, "net");
   ui.notifications.info(`NET removed from ${scene.name}.`);
 }
@@ -738,12 +737,8 @@ async function handleSocket(msg) {
   if (msg.action === "reveal") {
     const t = scene.tokens.get(msg.tokenId);
     if (!t?.getFlag(ID, "accessPoint")) return;
-    if (t.hidden) await t.update({ hidden: false });
-    const g = scene.grid.size;
-    if (!scene.notes.some((n) => n.getFlag(ID, "accessPin") === t.id)) {
-      await scene.createEmbeddedDocuments("Note", [{ x: t.x + (t.width * g) / 2, y: t.y + (t.height * g) / 2, texture: { src: "icons/svg/net.svg", tint: "#66ffcc" },
-        iconSize: 32, text: "Access Point", fontSize: 18, textAnchor: 1, global: true, flags: { [ID]: { accessPin: t.id, net: t.getFlag(ID, "net") } } }]);
-    }
+    await t.update({ hidden: false, [`flags.${ID}.scanned`]: true });
+    scene.tokens.get(t.id)?.object?.refresh();
   }
 }
 
@@ -819,6 +814,19 @@ async function toggleView() {
   const g = scene.grid.size;
   await canvas.animatePan({ x: target.x + (target.width * g) / 2, y: target.y + (target.height * g) / 2, duration: 250 });
 }
+
+/* A scanned access point is seen through walls: Scanner gives the location, not a view. */
+Hooks.once("ready", () => {
+  const proto = CONFIG.Token.objectClass.prototype;
+  const desc = Object.getOwnPropertyDescriptor(proto, "isVisible");
+  if (!desc?.get || proto.__cprNetarchVisible) return;
+  proto.__cprNetarchVisible = true;
+  Object.defineProperty(proto, "isVisible", { configurable: true, get() {
+    const d = this.document;
+    if (d?.getFlag(ID, "accessPoint") && d.getFlag(ID, "scanned") && !d.hidden) return true;
+    return desc.get.call(this);
+  } });
+});
 
 Hooks.on("renderTokenHUD", (hud, html) => {
   try {
