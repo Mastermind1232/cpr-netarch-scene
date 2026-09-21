@@ -863,7 +863,7 @@ function open() {
     <div class="row">
       <div><label>Scene name (new scene only)</label><input type="text" name="name" value="NET Architecture"></div>
       <div><label>Difficulty</label><select name="tier">${tierOpts}</select></div>
-      <div style="flex:0"><button type="button" data-roll title="Roll it by the book: 3d6 floors, d10 branches, Lobby and Body tables"><i class="fas fa-dice"></i> Roll by the book</button></div>
+      <div style="flex:0 0 auto"><button type="button" data-roll style="width:auto;white-space:nowrap;padding:0 12px;height:28px;line-height:26px" title="Roll it by the book: 3d6 floors, d10 branches, Lobby and Body tables"><i class="fas fa-dice"></i> Roll by the book</button></div>
     </div>
     <label>Floors <span style="font-weight:normal;font-size:11px;margin-left:8px"><input type="checkbox" name="astext" style="vertical-align:middle"> edit as text</span></label>
     <div class="floors"></div>
