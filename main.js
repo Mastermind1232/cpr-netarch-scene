@@ -527,6 +527,7 @@ function reportErr(err) {
 const guard = (fn) => async (...args) => { try { await fn(...args); } catch (err) { reportErr(err); } };
 
 Hooks.once("init", () => {
+  registerSense();
   game.settings.register(ID, "backdrop", {
     name: "Backdrop",
     hint: "Path or URL of the Net Archive video every architecture is built on (3840x2160, 150px grid).",
@@ -706,7 +707,7 @@ function nearAccessPoint(token) {
   const g = scene.grid.size;
   const perSquare = scene.grid.distance || 2;
   const reach = (6 / perSquare) * g + g / 2;
-  return scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && t.getFlag(ID, "scanned") && Math.hypot(t.x - token.x, t.y - token.y) <= reach);
+  return scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && t.getFlag(ID, "scanned") && !t.hidden && Math.hypot(t.x - token.x, t.y - token.y) <= reach);
 }
 
 async function jackIn(scene, bodyId) {
@@ -752,31 +753,47 @@ async function requestJack(action, scene, bodyId) {
 /** The body of a token, whether it is the body itself or its avatar. */
 const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
 
-/* An access point stays a hidden token; what the players see once it is found is a map pin on the same spot.
-   Pins ignore walls and fog, and Levels reads their elevation range, so the pin shows on the floor and never from inside the NET. */
-const pinOf = (scene, tokenId) => scene.notes.find((n) => n.getFlag(ID, "accessPin") === tokenId) ?? null;
+/* Found access points are seen through walls by way of a detection mode: a "sense" that only ever detects a found
+   access point on the viewer's own level. Scanner gives the location, not a view, and the NET below never sees it. */
+const SENSE = "cprNetarchAccess";
+function registerSense() {
+  const DM = foundry.canvas?.perception?.DetectionMode ?? globalThis.DetectionMode;
+  if (!DM) return console.warn(`${ID} | DetectionMode class not found; found access points will only show in line of sight.`);
+  class AccessPointSense extends DM {
+    _canDetect(visionSource, target) {
+      const d = target?.document;
+      if (!d?.getFlag?.(ID, "accessPoint") || !d.getFlag(ID, "scanned") || d.hidden) return false;
+      const src = visionSource?.elevation ?? visionSource?.object?.document?.elevation ?? 0;
+      return Math.abs(src - (d.elevation ?? 0)) < 2;
+    }
+  }
+  CONFIG.Canvas.detectionModes[SENSE] = new AccessPointSense({ id: SENSE, label: "NET access point", type: DM.DETECTION_TYPES.OTHER, walls: false, angle: false });
+}
+/** Gives every player-owned character token on the scene the sense, so the crew sees what their runner found. */
+async function grantSense(scene) {
+  const updates = [];
+  for (const t of scene.tokens) {
+    if (t.getFlag(ID, "accessPoint") || t.getFlag(ID, "avatarOf")) continue;
+    if (!game.users.some((u) => !u.isGM && t.testUserPermission(u, "OWNER"))) continue;
+    const modes = (t.detectionModes ?? []).filter((m) => m.id !== SENSE);
+    updates.push({ _id: t.id, detectionModes: [...modes, { id: SENSE, enabled: true, range: 9999 }] });
+  }
+  if (updates.length) await scene.updateEmbeddedDocuments("Token", updates, { cprNetarch: true });
+}
 async function revealAccessPoint(scene, t) {
   if (!t?.getFlag(ID, "accessPoint")) return;
-  const g = scene.grid.size;
-  if (!pinOf(scene, t.id)) {
-    await scene.createEmbeddedDocuments("Note", [{ x: t.x + (t.width * g) / 2, y: t.y + (t.height * g) / 2, elevation: 0,
-      texture: { src: t.texture?.src || "icons/svg/net.svg", tint: t.texture?.tint || "#66ffcc" }, iconSize: 48, text: "Access Point", fontSize: 20, textAnchor: 1, global: true,
-      flags: { [ID]: { accessPin: t.id, net: t.getFlag(ID, "net") }, levels: { rangeTop: 4 } } }]);
-  }
-  await t.update({ hidden: true, [`flags.${ID}.scanned`]: true }, { cprNetarch: true });
+  await t.update({ hidden: false, [`flags.${ID}.scanned`]: true }, { cprNetarch: true });
+  await grantSense(scene);
 }
 async function concealAccessPoint(scene, t) {
   if (!t?.getFlag(ID, "accessPoint")) return;
-  const pin = pinOf(scene, t.id);
-  if (pin) await scene.deleteEmbeddedDocuments("Note", [pin.id]);
   await t.update({ hidden: true, [`flags.${ID}.scanned`]: false }, { cprNetarch: true });
 }
 /* The GM's eye toggle on an access point flips it between found and not found. The token itself never shows. */
 Hooks.on("updateToken", (doc, changes, options, userId) => {
   if (!game.user.isGM || userId !== game.user.id || !doc.getFlag(ID, "accessPoint") || options?.cprNetarch) return;
-  if (changes.hidden !== false) return;
-  const scene = doc.parent;
-  (doc.getFlag(ID, "scanned") ? concealAccessPoint(scene, doc) : revealAccessPoint(scene, doc)).catch(reportErr);
+  if (changes.hidden === false) revealAccessPoint(doc.parent, doc).catch(reportErr);
+  else if (changes.hidden === true) concealAccessPoint(doc.parent, doc).catch(reportErr);
 });
 
 /** The DV a Scanner check needs here: the architecture's tier DV, read from the build record. */
