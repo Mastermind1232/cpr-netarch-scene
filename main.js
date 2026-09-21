@@ -563,9 +563,15 @@ Hooks.once("init", () => {
     default: "https://assets.forge-vtt.com/6a7ca306f6a96908b438164c/NuNu/Tiles/NetArch",
   });
   game.keybindings.register(ID, "toggle", {
-    name: "Jack in, or switch between floor and NET",
-    hint: "Not jacked in: jacks you in if a found access point is within 6 metres. Jacked in: jumps your view between your body and your NET token.",
+    name: "Jack in / Jack out",
+    hint: "Not jacked in: jacks you in if a found access point is within 6 metres. Jacked in: jacks you out.",
     editable: [{ key: "KeyJ", modifiers: ["Shift"] }],
+    onDown: () => { jackToggle().catch(reportErr); return true; },
+  });
+  game.keybindings.register(ID, "view", {
+    name: "Switch view between body and NET",
+    hint: "While jacked in, jumps your view between your body on the floor and your NET token. The NET is virtual; your body still sees the room.",
+    editable: [{ key: "KeyJ" }],
     onDown: () => { toggleView().catch(reportErr); return true; },
   });
   game.keybindings.register(ID, "scan", {
@@ -1043,20 +1049,38 @@ async function scanner() {
 }
 
 /** Switches the viewer between their body and their NET avatar. */
+/** The token the player means: the selected one, else their jacked-in body, else any body of theirs on the scene. */
+function ownToken(scene) {
+  return canvas.tokens.controlled[0]?.document
+    ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf") && avatarOf(scene, t.id))
+    ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf") && !t.getFlag(ID, "accessPoint"));
+}
+
+/** Shift+J: the mechanical act. Jacks in beside a found access point, or jacks out if already in. */
+async function jackToggle() {
+  const scene = canvas?.scene;
+  if (!scene) return;
+  const current = ownToken(scene);
+  if (!current) return ui.notifications.warn("You have no token on this scene.");
+  const bodyId = bodyIdOf(current);
+  if (avatarOf(scene, bodyId)) return requestJack("jackOut", scene, bodyId);
+  const body = scene.tokens.get(bodyId);
+  if (!body) return ui.notifications.warn("Your body is not on this scene.");
+  if (!scene.getFlag(ID, "net")) return ui.notifications.warn("There is no NET architecture here.");
+  if (!nearAccessPoint(body)) return ui.notifications.warn("There is no revealed NET access point within 6 metres.");
+  return requestJack("jackIn", scene, bodyId);
+}
+
+/** J: a change of view only. Jumps between the body on the floor and the NET token while jacked in. */
 async function toggleView() {
   const scene = canvas?.scene;
   if (!scene) return;
-  const current = canvas.tokens.controlled[0]?.document
-    ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf") && avatarOf(scene, t.id))
-    ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf"));
+  const current = ownToken(scene);
   if (!current) return ui.notifications.warn("You have no token on this scene.");
   const bodyId = bodyIdOf(current);
-  const target = current.id === bodyId ? avatarOf(scene, bodyId) : scene.tokens.get(bodyId);
-  if (!target && current.id === bodyId) {
-    if (!scene.getFlag(ID, "net")) return ui.notifications.warn("There is no NET architecture here.");
-    if (!nearAccessPoint(current)) return ui.notifications.warn("There is no revealed NET access point within 6 metres.");
-    return requestJack("jackIn", scene, bodyId);
-  }
+  const avatar = avatarOf(scene, bodyId);
+  if (!avatar) return ui.notifications.warn("You are not jacked in. Shift+J jacks in beside a found access point.");
+  const target = current.id === bodyId ? avatar : scene.tokens.get(bodyId);
   if (!target) return ui.notifications.warn("Your body is not on this scene.");
   target.object?.control({ releaseOthers: true });
   const g = scene.grid.size;
@@ -1301,7 +1325,7 @@ Hooks.once("ready", async () => {
 });
 Hooks.once("ready", () => {
   const mod = game.modules.get(ID);
-  if (mod) mod.api = { open, build, buildUnder, removeUnder, toggle: toggleView, roll: rollArchitecture, parse: parseText, toText, layout, ICE, DEMONS };
+  if (mod) mod.api = { open, build, buildUnder, removeUnder, toggle: toggleView, jack: jackToggle, roll: rollArchitecture, parse: parseText, toText, layout, ICE, DEMONS };
   game.socket.on(SOCKET, (msg) => {
     if (game.user !== game.users.activeGM) return;
     handleSocket(msg).catch(reportErr);
