@@ -654,22 +654,59 @@ async function build({ name, tier, text, arch: rolled = null }) {
  */
 /* Every embedded collection with a position, so the map's documents can be moved when the scene grows or shrinks. */
 const PLACED = ["tokens", "tiles", "lights", "notes", "drawings", "sounds", "templates"];
-async function shiftScene(scene, dy) {
+/** Resolves once the canvas has redrawn, which Foundry does on its own when the viewed scene's size changes. */
+function afterRedraw(scene) {
+  if (canvas?.scene?.id !== scene.id) return Promise.resolve();
+  return new Promise((resolve) => { const t = setTimeout(resolve, 8000); Hooks.once("canvasReady", () => { clearTimeout(t); resolve(); }); });
+}
+/** Moves every placed document by dy, recording each collection as it goes so an interrupted move can be undone exactly. */
+async function shiftScene(scene, dy, done = null) {
   if (!dy) return;
-  const walls = scene.walls.map((w) => ({ _id: w.id, c: [w.c[0], w.c[1] + dy, w.c[2], w.c[3] + dy] }));
-  if (walls.length) await scene.updateEmbeddedDocuments("Wall", walls);
+  const mark = async (name) => { if (done) { done.push(name); await scene.setFlag(ID, "pending", { ...(scene.getFlag(ID, "pending") ?? {}), shifted: [...done] }); } };
+  const skip = (name) => done && (scene.getFlag(ID, "pending")?.shifted ?? []).includes(name);
+  if (!skip("walls")) {
+    const walls = scene.walls.map((w) => ({ _id: w.id, c: [w.c[0], w.c[1] + dy, w.c[2], w.c[3] + dy] }));
+    if (walls.length) await scene.updateEmbeddedDocuments("Wall", walls);
+    await mark("walls");
+  }
   for (const name of PLACED) {
+    if (skip(name)) continue;
+    const coll = scene[name]; if (!coll?.size) { await mark(name); continue; }
+    const docName = coll.documentClass?.documentName ?? coll.contents[0]?.documentName;
+    await scene.updateEmbeddedDocuments(docName, coll.map((d) => ({ _id: d.id, y: d.y + dy })));
+    await mark(name);
+  }
+}
+/** Undoes a build that never finished: restores the scene's size and moves back whatever had been moved. */
+async function repairPending(scene) {
+  const pending = scene.getFlag(ID, "pending");
+  if (!pending) return false;
+  const back = pending.shifted ?? [];
+  if (back.includes("walls")) {
+    const walls = scene.walls.map((w) => ({ _id: w.id, c: [w.c[0], w.c[1] - pending.dy, w.c[2], w.c[3] - pending.dy] }));
+    if (walls.length) await scene.updateEmbeddedDocuments("Wall", walls);
+  }
+  for (const name of PLACED) {
+    if (!back.includes(name)) continue;
     const coll = scene[name]; if (!coll?.size) continue;
     const docName = coll.documentClass?.documentName ?? coll.contents[0]?.documentName;
-    const updates = coll.map((d) => ({ _id: d.id, y: d.y + dy }));
-    await scene.updateEmbeddedDocuments(docName, updates);
+    await scene.updateEmbeddedDocuments(docName, coll.map((d) => ({ _id: d.id, y: d.y - pending.dy })));
   }
+  const mine = scene.tokens.filter((t) => t.getFlag(ID, "net") === pending.tag).map((t) => t.id); if (mine.length) await scene.deleteEmbeddedDocuments("Token", mine);
+  const mw = scene.walls.filter((w) => w.getFlag(ID, "net") === pending.tag).map((w) => w.id); if (mw.length) await scene.deleteEmbeddedDocuments("Wall", mw);
+  const mt = scene.tiles.filter((t) => t.getFlag(ID, "net") === pending.tag).map((t) => t.id); if (mt.length) await scene.deleteEmbeddedDocuments("Tile", mt);
+  await scene.update({ height: pending.height, "background.fit": pending.fit, "background.anchorY": pending.anchorY });
+  await afterRedraw(scene);
+  await scene.unsetFlag(ID, "pending");
+  ui.notifications.info(`NET Architecture: an unfinished build on ${scene.name} was undone.`);
+  return true;
 }
 
 async function buildUnder({ tier, text, arch: rolled = null }) {
   const scene = canvas?.scene;
   if (!scene) throw new Error("Open the scene you want the NET beside first.");
   if (scene.getFlag(ID, "net")) throw new Error(`${scene.name} already has a NET. Remove it first.`);
+  if (await repairPending(scene)) return ui.notifications.warn("The last build had been interrupted and was undone. Build again.");
   const { arch, placed, art, backdrop, ids, need, tierDv } = await prepare({ tier, text, arch: rolled });
 
   // Grow the scene downward by the NET backdrop plus a margin row, keep the map at its natural size at the top,
@@ -681,11 +718,13 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   const padYold = Math.ceil((p * oldH) / g), padYnew = Math.ceil((p * newH) / g), padX = Math.ceil((p * scene.width) / g);
   const dy = (padYnew - padYold) * g;
   const before = { height: oldH, fit: scene.background?.fit ?? "fill", anchorY: scene.background?.anchorY ?? 0, dy };
+  const tag = foundry.utils.randomID();
+  await scene.setFlag(ID, "pending", { ...before, tag, shifted: [] });
   await scene.update({ height: newH, "background.fit": "width", "background.anchorY": 0 });
-  await shiftScene(scene, dy);
+  await afterRedraw(scene);
+  await shiftScene(scene, dy, []);
 
   const sp = { g, padX, padY: padYnew + mapRows + 1 };
-  const tag = foundry.utils.randomID();
   const { docs, floors, bottom, record, entry } = buildSceneData(arch, placed, { name: scene.name, backdrop, art, ids, tierDv, sp, embed: { level: null, tag } });
 
   // A wall along the seam so nothing walks or looks from the map into the NET, or back.
@@ -705,6 +744,7 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   await scene.createEmbeddedDocuments("Wall", [...docs.walls, seam]);
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
   await scene.setFlag(ID, "net", { tag, sp, entry, level: { bottom: 0, top: 0, elev: 0 }, beside: before, scanDv: 6, ...record });
+  await scene.unsetFlag(ID, "pending");
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden at the centre of your view; drag it where it belongs.`);
 }
@@ -712,8 +752,9 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
 /** Removes everything a build placed under the current scene, avatars included. */
 async function removeUnder() {
   const scene = canvas?.scene;
+  if (scene && await repairPending(scene)) return;
   const net = scene?.getFlag(ID, "net");
-  if (!net) throw new Error("This scene has no NET under it.");
+  if (!net) throw new Error("This scene has no NET.");
   const mine = (c) => c.filter((d) => d.getFlag(ID, "net") === net.tag).map((d) => d.id);
   const tokens = scene.tokens.filter((t) => t.getFlag(ID, "net") === net.tag || t.getFlag(ID, "avatarOf")).map((t) => t.id);
   if (tokens.length) await scene.deleteEmbeddedDocuments("Token", tokens);
@@ -726,6 +767,7 @@ async function removeUnder() {
   if (net.beside) {
     await shiftScene(scene, -net.beside.dy);
     await scene.update({ height: net.beside.height, "background.fit": net.beside.fit, "background.anchorY": net.beside.anchorY });
+    await afterRedraw(scene);
   }
   // Leftovers from NETs built under the map with Levels.
   if (scene.getFlag(ID, "fogWas") !== undefined) { await scene.update({ "fog.exploration": true }); await scene.unsetFlag(ID, "fogWas"); }
@@ -1205,6 +1247,7 @@ function open() {
 Hooks.once("ready", async () => {
   if (!game.user.isGM) return;
   for (const scene of game.scenes) {
+    if (scene.getFlag(ID, "pending")) await repairPending(scene).catch(reportErr);
     if (!scene.getFlag(ID, "net")) continue;
     const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id);
     if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins).catch(reportErr);
