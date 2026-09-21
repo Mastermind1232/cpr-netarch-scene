@@ -942,7 +942,7 @@ async function scanner() {
   const name = actor?.name ?? token.name;
   let result;
   if (!nearest) result = `Nothing here they have not already found.`;
-  else if (found) result = `There is an access point within ${dist} metres.`;
+  else if (found) result = `An access point has been identified within ${dist} metres.`;
   else if (total >= dv - 2) {
     const a = Math.atan2(-(nearest.y - token.y), nearest.x - token.x) * 180 / Math.PI; // screen y grows downward
     const dirs = ["east", "north-east", "north", "north-west", "west", "south-west", "south", "south-east"];
