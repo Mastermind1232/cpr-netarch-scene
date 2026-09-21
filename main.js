@@ -555,7 +555,7 @@ Hooks.once("init", () => {
   });
   game.keybindings.register(ID, "scan", {
     name: "Scanner",
-    hint: "The Scanner Meat Action: Interface + 1d10 against DV 6 (set per scene in the NET flag). A success reveals the nearest hidden access point.",
+    hint: "The Scanner Meat Action: an Interface check against a DV set by distance to the nearest unfound access point (6 within 20 m, 9 within 30, 13 within 40, 21 beyond). A near miss gives the direction.",
     editable: [{ key: "KeyS", modifiers: ["Shift"] }],
     onDown: () => { scanner().catch(reportErr); return true; },
   });
@@ -927,17 +927,28 @@ async function scanner() {
   const actor = token.actor;
   const role = actor?.items?.find((i) => i.type === "role" && (String(i.system?.mainRoleAbility ?? "").toLowerCase() === "interface" || /netrunner/i.test(i.name)));
   if (!role) return ui.notifications.warn(`${actor?.name ?? "This token"} has no Netrunner role to Scan with.`);
-  const dv = scanDv(scene);
-  const hidden = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && !t.getFlag(ID, "scanned"))
-    .sort((a, b) => Math.hypot(a.x - token.x, a.y - token.y) - Math.hypot(b.x - token.x, b.y - token.y));
+  const g = scene.grid.size, per = scene.grid.distance || 2;
+  const metres = (t) => (Math.hypot(t.x - token.x, t.y - token.y) / g) * per;
+  const hidden = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && !t.getFlag(ID, "scanned")).sort((a, b) => metres(a) - metres(b));
+  const nearest = hidden[0] ?? null;
+  const range = nearest ? metres(nearest) : Infinity;
+  // Scanner DV by distance to the nearest unfound point: 6 within 20 m, 9 within 30, 13 within 40, 21 beyond.
+  const dv = range <= 20 ? 6 : range <= 30 ? 9 : range <= 40 ? 13 : 21;
   const total = await interfaceCheck(actor, token, role);
   if (total === null) return;
   const ok = total > dv;
-  const found = ok && hidden.length ? hidden[0] : null;
-  const g = scene.grid.size, per = scene.grid.distance || 2;
-  const dist = found ? Math.max(per, Math.ceil((Math.hypot(found.x - token.x, found.y - token.y) / g)) * per) : 0;
+  const found = ok ? nearest : null;
+  const dist = found ? Math.max(per, Math.ceil(range / per) * per) : 0;
   const name = actor?.name ?? token.name;
-  const result = ok ? (found ? `There is an access point within ${dist} metres.` : `Nothing here they have not already found.`) : `Unable to identify nearby access points.`;
+  let result;
+  if (!nearest) result = `Nothing here they have not already found.`;
+  else if (found) result = `There is an access point within ${dist} metres.`;
+  else if (total >= dv - 2) {
+    const a = Math.atan2(-(nearest.y - token.y), nearest.x - token.x) * 180 / Math.PI; // screen y grows downward
+    const dirs = ["east", "north-east", "north", "north-west", "west", "south-west", "south", "south-east"];
+    const dir = dirs[Math.round(((a + 360) % 360) / 45) % 8];
+    result = `Unable to identify nearby access points. The signal seems to come from the ${dir}.`;
+  } else result = `Unable to identify nearby access points.`;
   const line = `<b>${name} uses their Scanner.</b> ${result}`;
   await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor, token }), content: `<div class="cpr-netarch-scan">${line}</div>` });
   if (!found) return;
