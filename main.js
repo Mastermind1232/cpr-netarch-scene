@@ -911,7 +911,7 @@ async function toggleView() {
   const target = current.id === bodyId ? avatarOf(scene, bodyId) : scene.tokens.get(bodyId);
   if (!target && current.id === bodyId) {
     if (!scene.getFlag(ID, "net")) return ui.notifications.warn("There is no NET architecture here.");
-    if (!nearAccessPoint(current)) return ui.notifications.warn("There is no NET access point within 6 metres.");
+    if (!nearAccessPoint(current)) return ui.notifications.warn("There is no revealed NET access point within 6 metres.");
     return requestJack("jackIn", scene, bodyId);
   }
   if (!target) return ui.notifications.warn("Your body is not on this scene.");
