@@ -711,25 +711,30 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
 
   // Grow the scene downward by the NET backdrop plus a margin row, keep the map at its natural size at the top,
   // and move everything already on the map down with it (document coordinates count from the padded canvas corner).
-  const g = scene.grid.size, p = scene.padding;
+  const g = scene.grid.size;
   const oldH = scene.height, mapRows = Math.ceil(oldH / g);
   const annexRows = Math.ceil(SCENE.height / G) + 1;
   const newH = mapRows * g + annexRows * g;
-  const padYold = Math.ceil((p * oldH) / g), padYnew = Math.ceil((p * newH) / g), padX = Math.ceil((p * scene.width) / g);
-  const dy = (padYnew - padYold) * g;
-  const before = { height: oldH, fit: scene.background?.fit ?? "fill", anchorY: scene.background?.anchorY ?? 0, dy };
+  // Let Foundry say where the map sits before and after: its padding rounding is its own business.
+  const yBefore = scene.dimensions.sceneY;
+  const before = { height: oldH, fit: scene.background?.fit ?? "fill", anchorY: scene.background?.anchorY ?? 0, dy: 0 };
   const tag = foundry.utils.randomID();
   await scene.setFlag(ID, "pending", { ...before, tag, shifted: [] });
   await scene.update({ height: newH, "background.fit": "width", "background.anchorY": 0 });
   await afterRedraw(scene);
+  const dims = scene.dimensions;
+  const dy = dims.sceneY - yBefore;
+  before.dy = dy;
+  await scene.setFlag(ID, "pending", { ...before, tag, shifted: [] });
   await shiftScene(scene, dy, []);
 
+  const padX = Math.round(dims.sceneX / g), padYnew = Math.round(dims.sceneY / g);
   const sp = { g, padX, padY: padYnew + mapRows + 1 };
   const { docs, floors, bottom, record, entry } = buildSceneData(arch, placed, { name: scene.name, backdrop, art, ids, tierDv, sp, embed: { level: null, tag } });
 
   // A wall along the seam so nothing walks or looks from the map into the NET, or back.
   const seamY = (padYnew + mapRows) * g;
-  const seam = tagged("wall", { c: [0, seamY, scene.dimensions?.width ?? (scene.width + 2 * padX * g), seamY], move: 20, sight: 20, light: 20, sound: 20, door: 0, ds: 0, dir: 0 }, { level: null, tag });
+  const seam = tagged("wall", { c: [0, seamY, dims.width, seamY], move: 20, sight: 20, light: 20, sound: 20, door: 0, ds: 0, dir: 0 }, { level: null, tag });
 
   // The access point: hidden, at the middle of whatever the GM is looking at, dragged into place afterwards.
   const pivot = canvas.stage.pivot;
