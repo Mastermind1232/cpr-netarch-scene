@@ -868,7 +868,7 @@ function open() {
     <label>Floors <span style="font-weight:normal;font-size:11px;margin-left:8px"><input type="checkbox" name="astext" style="vertical-align:middle"> edit as text</span></label>
     <div class="floors"></div>
     <textarea name="floors" style="display:none"></textarea>
-    <p class="hint">A floor holds one or more pieces. Password, File or Control Node take a DV; leave it blank to use the difficulty's. <b>Build under ${here}</b> lays the NET beneath the open scene as a hidden Levels floor. Needs Levels and Wall Height.</p>
+
   </form>`;
 
   const state = { main: [], branches: [], header: null };
