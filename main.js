@@ -377,7 +377,7 @@ function tagged(kind, doc, embed) {
   const flags = { ...(doc.flags ?? {}), [ID]: { net: tag } };
   if (kind === "wall") flags["wall-height"] = { top: level.top, bottom: level.bottom };
   if (kind === "tile") { flags.levels = { rangeBottom: level.bottom, rangeTop: level.top, showIfAbove: false, noCollision: false }; doc.elevation = level.bottom; }
-  if (kind === "token") doc.elevation = level.elev;
+  if (kind === "token") { doc.elevation = level.elev; doc.rotation = 0; doc.lockRotation = true; }
   return { ...doc, flags };
 }
 
@@ -1158,6 +1158,8 @@ Hooks.once("ready", async () => {
     if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins).catch(reportErr);
     const stuck = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && t.hidden && t.getFlag(ID, "scanned")).map((t) => ({ _id: t.id, [`flags.${ID}.scanned`]: false }));
     if (stuck.length) await scene.updateEmbeddedDocuments("Token", stuck, { cprNetarch: true }).catch(reportErr);
+    const tilted = scene.tokens.filter((t) => t.getFlag(ID, "net") && !t.getFlag(ID, "avatarOf") && (t.rotation !== 0 || !t.lockRotation)).map((t) => ({ _id: t.id, rotation: 0, lockRotation: true }));
+    if (tilted.length) await scene.updateEmbeddedDocuments("Token", tilted, { cprNetarch: true }).catch(reportErr);
     // NETs built before the floor picker entries existed get them now.
     const levels = scene.getFlag("levels", "sceneLevels") ?? [];
     if (!levels.some((l) => l?.[2] === "NET")) {
