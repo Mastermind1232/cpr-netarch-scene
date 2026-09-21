@@ -528,6 +528,8 @@ const guard = (fn) => async (...args) => { try { await fn(...args); } catch (err
 
 Hooks.once("init", () => {
   registerSense();
+  Hooks.once("setup", registerSense);
+  Hooks.once("ready", registerSense);
   game.settings.register(ID, "backdrop", {
     name: "Backdrop",
     hint: "Path or URL of the Net Archive video every architecture is built on (3840x2160, 150px grid).",
@@ -757,17 +759,23 @@ const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
    access point on the viewer's own level. Scanner gives the location, not a view, and the NET below never sees it. */
 const SENSE = "cprNetarchAccess";
 function registerSense() {
-  const DM = foundry.canvas?.perception?.DetectionMode ?? globalThis.DetectionMode;
-  if (!DM) return console.warn(`${ID} | DetectionMode class not found; found access points will only show in line of sight.`);
-  class AccessPointSense extends DM {
-    _canDetect(visionSource, target) {
-      const d = target?.document;
-      if (!d?.getFlag?.(ID, "accessPoint") || !d.getFlag(ID, "scanned") || d.hidden) return false;
-      const src = visionSource?.elevation ?? visionSource?.object?.document?.elevation ?? 0;
-      return Math.abs(src - (d.elevation ?? 0)) < 2;
+  try {
+    if (CONFIG.Canvas.detectionModes[SENSE]) return;
+    const DM = globalThis.DetectionMode ?? foundry.canvas?.perception?.DetectionMode;
+    if (!DM) throw new Error("DetectionMode class not found");
+    class AccessPointSense extends DM {
+      _canDetect(visionSource, target) {
+        const d = target?.document;
+        if (!d?.getFlag?.(ID, "accessPoint") || !d.getFlag(ID, "scanned") || d.hidden) return false;
+        const src = visionSource?.elevation ?? visionSource?.object?.document?.elevation ?? 0;
+        return Math.abs(src - (d.elevation ?? 0)) < 2;
+      }
     }
+    CONFIG.Canvas.detectionModes[SENSE] = new AccessPointSense({ id: SENSE, label: "NET access point", type: DM.DETECTION_TYPES.OTHER, walls: false, angle: false, tokenConfig: true });
+    console.log(`${ID} | registered detection mode ${SENSE}`);
+  } catch (err) {
+    console.error(`${ID} | could not register the access point sense; found points will only show in line of sight`, err);
   }
-  CONFIG.Canvas.detectionModes[SENSE] = new AccessPointSense({ id: SENSE, label: "NET access point", type: DM.DETECTION_TYPES.OTHER, walls: false, angle: false });
 }
 /** Gives every player-owned character token on the scene the sense, so the crew sees what their runner found. */
 async function grantSense(scene) {
