@@ -1158,6 +1158,14 @@ Hooks.once("ready", async () => {
     if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins).catch(reportErr);
     const stuck = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && t.hidden && t.getFlag(ID, "scanned")).map((t) => ({ _id: t.id, [`flags.${ID}.scanned`]: false }));
     if (stuck.length) await scene.updateEmbeddedDocuments("Token", stuck, { cprNetarch: true }).catch(reportErr);
+    // NETs built before the floor picker entries existed get them now.
+    const levels = scene.getFlag("levels", "sceneLevels") ?? [];
+    if (!levels.some((l) => l?.[2] === "NET")) {
+      const next = [...levels];
+      if (!next.some((l) => Number(l[0]) <= 0 && Number(l[1]) >= 0)) next.push(["0", "8", "Floor"]);
+      next.push([String(NET_LEVEL.bottom), String(NET_LEVEL.top), "NET"]);
+      await scene.setFlag("levels", "sceneLevels", next).catch(reportErr);
+    }
   }
 });
 Hooks.once("ready", () => {
