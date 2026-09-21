@@ -542,7 +542,7 @@ Hooks.once("init", () => {
   game.keybindings.register(ID, "toggle", {
     name: "Switch between floor and NET",
     hint: "Jumps your view and selection between your body and your jacked-in token.",
-    editable: [{ key: "KeyN" }],
+    editable: [{ key: "KeyJ" }],
     onDown: () => { toggleView().catch(reportErr); return true; },
   });
 });
@@ -744,7 +744,9 @@ const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
 async function toggleView() {
   const scene = canvas?.scene;
   if (!scene) return;
-  const current = canvas.tokens.controlled[0]?.document ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf"));
+  const current = canvas.tokens.controlled[0]?.document
+    ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf") && avatarOf(scene, t.id))
+    ?? scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf"));
   if (!current) return ui.notifications.warn("You have no token on this scene.");
   const bodyId = bodyIdOf(current);
   const target = current.id === bodyId ? avatarOf(scene, bodyId) : scene.tokens.get(bodyId);
