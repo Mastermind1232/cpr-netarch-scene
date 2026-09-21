@@ -375,9 +375,12 @@ function tagged(kind, doc, embed) {
   if (!embed) return doc;
   const { level, tag } = embed;
   const flags = { ...(doc.flags ?? {}), [ID]: { net: tag } };
-  if (kind === "wall") flags["wall-height"] = { top: level.top, bottom: level.bottom };
-  if (kind === "tile") { flags.levels = { rangeBottom: level.bottom, rangeTop: level.top, showIfAbove: false, noCollision: false }; doc.elevation = level.bottom; }
-  if (kind === "token") { doc.elevation = level.elev; doc.rotation = 0; doc.lockRotation = true; }
+  if (level) {
+    if (kind === "wall") flags["wall-height"] = { top: level.top, bottom: level.bottom };
+    if (kind === "tile") { flags.levels = { rangeBottom: level.bottom, rangeTop: level.top, showIfAbove: false, noCollision: false }; doc.elevation = level.bottom; }
+    if (kind === "token") doc.elevation = level.elev;
+  } else if (kind === "token") doc.elevation = 0;
+  if (kind === "token") { doc.rotation = 0; doc.lockRotation = true; }
   return { ...doc, flags };
 }
 
@@ -643,52 +646,67 @@ async function build({ name, tier, text, arch: rolled = null }) {
 /*  The NET under a scene (Levels)                                     */
 /* ------------------------------------------------------------------ */
 
-function levelsReady() {
-  return game.modules.get("levels")?.active && game.modules.get("wall-height")?.active;
-}
 
 /**
  * Lays the architecture under the scene currently on the canvas: the
  * backdrop as a Levels tile, walls with Wall Height ranges, tokens at the
  * NET elevation, and a hidden access-point marker at the centre of the view.
  */
+/* Every embedded collection with a position, so the map's documents can be moved when the scene grows or shrinks. */
+const PLACED = ["tokens", "tiles", "lights", "notes", "drawings", "sounds", "templates"];
+async function shiftScene(scene, dy) {
+  if (!dy) return;
+  const walls = scene.walls.map((w) => ({ _id: w.id, c: [w.c[0], w.c[1] + dy, w.c[2], w.c[3] + dy] }));
+  if (walls.length) await scene.updateEmbeddedDocuments("Wall", walls);
+  for (const name of PLACED) {
+    const coll = scene[name]; if (!coll?.size) continue;
+    const docName = coll.documentClass?.documentName ?? coll.contents[0]?.documentName;
+    const updates = coll.map((d) => ({ _id: d.id, y: d.y + dy }));
+    await scene.updateEmbeddedDocuments(docName, updates);
+  }
+}
+
 async function buildUnder({ tier, text, arch: rolled = null }) {
   const scene = canvas?.scene;
-  if (!scene) throw new Error("Open the scene you want the NET under first.");
-  if (!levelsReady()) throw new Error("Building under a scene needs the Levels and Wall Height modules active.");
-  if (scene.getFlag(ID, "net")) throw new Error(`${scene.name} already has a NET under it. Remove it first.`);
+  if (!scene) throw new Error("Open the scene you want the NET beside first.");
+  if (scene.getFlag(ID, "net")) throw new Error(`${scene.name} already has a NET. Remove it first.`);
   const { arch, placed, art, backdrop, ids, need, tierDv } = await prepare({ tier, text, arch: rolled });
 
-  const g = scene.grid.size;
-  const sp = { g, padX: Math.ceil((scene.padding * scene.width) / g), padY: Math.ceil((scene.padding * scene.height) / g) };
+  // Grow the scene downward by the NET backdrop plus a margin row, keep the map at its natural size at the top,
+  // and move everything already on the map down with it (document coordinates count from the padded canvas corner).
+  const g = scene.grid.size, p = scene.padding;
+  const oldH = scene.height, mapRows = Math.ceil(oldH / g);
+  const annexRows = Math.ceil(SCENE.height / G) + 1;
+  const newH = mapRows * g + annexRows * g;
+  const padYold = Math.ceil((p * oldH) / g), padYnew = Math.ceil((p * newH) / g), padX = Math.ceil((p * scene.width) / g);
+  const dy = (padYnew - padYold) * g;
+  const before = { height: oldH, fit: scene.background?.fit ?? "fill", anchorY: scene.background?.anchorY ?? 0, dy };
+  await scene.update({ height: newH, "background.fit": "width", "background.anchorY": 0 });
+  await shiftScene(scene, dy);
+
+  const sp = { g, padX, padY: padYnew + mapRows + 1 };
   const tag = foundry.utils.randomID();
-  const { docs, floors, bottom, record, entry } = buildSceneData(arch, placed, { name: scene.name, backdrop, art, ids, tierDv, sp, embed: { level: NET_LEVEL, tag } });
+  const { docs, floors, bottom, record, entry } = buildSceneData(arch, placed, { name: scene.name, backdrop, art, ids, tierDv, sp, embed: { level: null, tag } });
+
+  // A wall along the seam so nothing walks or looks from the map into the NET, or back.
+  const seamY = (padYnew + mapRows) * g;
+  const seam = tagged("wall", { c: [0, seamY, scene.dimensions?.width ?? (scene.width + 2 * padX * g), seamY], move: 20, sight: 20, light: 20, sound: 20, door: 0, ds: 0, dir: 0 }, { level: null, tag });
 
   // The access point: hidden, at the middle of whatever the GM is looking at, dragged into place afterwards.
   const pivot = canvas.stage.pivot;
   const ap = tagged("token", {
-    name: "Access Point", x: Math.floor(pivot.x / g) * g, y: Math.floor(pivot.y / g) * g, width: 1, height: 1,
+    name: "Access Point", x: Math.floor(pivot.x / g) * g, y: Math.floor((pivot.y + dy) / g) * g, width: 1, height: 1,
     texture: { src: "icons/svg/net.svg", fit: "contain", anchorX: 0.5, anchorY: 0.5, scaleX: 1, scaleY: 1, tint: "#66ffcc" },
     actorId: null, actorLink: false, disposition: 0, displayName: 30, displayBars: 0, hidden: true, sight: { enabled: false },
-  }, { level: { elev: 0 }, tag });
+  }, { level: null, tag });
   ap.flags[ID].accessPoint = true;
 
-  // The floor's own walls have no height, so Wall Height treats them as bottomless and they cut the NET's vision.
-  // Give every unflagged wall a floor-only band, and remember which ones we touched so Remove NET can undo it.
-  const floorWalls = scene.walls.filter((w) => !w.getFlag(ID, "net") && w.flags?.["wall-height"]?.bottom === undefined && w.flags?.["wall-height"]?.top === undefined)
-    .map((w) => ({ _id: w.id, "flags.wall-height": { bottom: -1, top: 999 }, [`flags.${ID}.floorWall`]: true }));
-  if (floorWalls.length) await scene.updateEmbeddedDocuments("Wall", floorWalls);
   await scene.createEmbeddedDocuments("Tile", docs.tiles);
-  await scene.createEmbeddedDocuments("Wall", docs.walls);
+  await scene.createEmbeddedDocuments("Wall", [...docs.walls, seam]);
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
-  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, scanDv: 6, ...record });
-  // Put the NET on Levels' floor picker so the GM can look down without selecting a token.
-  const levels = (scene.getFlag("levels", "sceneLevels") ?? []).filter((l) => l?.[2] !== "NET");
-  if (!levels.some((l) => Number(l[0]) <= 0 && Number(l[1]) >= 0)) levels.push(["0", "8", "Floor"]);
-  levels.push([String(NET_LEVEL.bottom), String(NET_LEVEL.top), "NET"]);
-  await scene.setFlag("levels", "sceneLevels", levels);
+  await scene.setFlag(ID, "net", { tag, sp, entry, level: { bottom: 0, top: 0, elev: 0 }, beside: before, scanDv: 6, ...record });
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
-  ui.notifications.info(`NET laid under ${scene.name}: ${floors.length} floors at elevation ${NET_LEVEL.elev}. The access point is hidden at the centre of your view; drag it where it belongs.`);
+  ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden at the centre of your view; drag it where it belongs.`);
 }
 
 /** Removes everything a build placed under the current scene, avatars included. */
@@ -705,9 +723,14 @@ async function removeUnder() {
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
   const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id); if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins);
   await scene.unsetFlag(ID, "net");
+  if (net.beside) {
+    await shiftScene(scene, -net.beside.dy);
+    await scene.update({ height: net.beside.height, "background.fit": net.beside.fit, "background.anchorY": net.beside.anchorY });
+  }
+  // Leftovers from NETs built under the map with Levels.
   if (scene.getFlag(ID, "fogWas") !== undefined) { await scene.update({ "fog.exploration": true }); await scene.unsetFlag(ID, "fogWas"); }
   const levels = (scene.getFlag("levels", "sceneLevels") ?? []).filter((l) => l?.[2] !== "NET");
-  await scene.setFlag("levels", "sceneLevels", levels);
+  if (levels.length !== (scene.getFlag("levels", "sceneLevels") ?? []).length) await scene.setFlag("levels", "sceneLevels", levels);
   ui.notifications.info(`NET removed from ${scene.name}.`);
 }
 
@@ -1104,7 +1127,7 @@ function open() {
     content,
     buttons: {
       build: { icon: '<i class="fas fa-hammer"></i>', label: "Build scene", callback: guard(async (html) => build(read(html))) },
-      under: { icon: '<i class="fas fa-layer-group"></i>', label: "Build under this scene", callback: guard(async (html) => buildUnder(read(html))) },
+      under: { icon: '<i class="fas fa-layer-group"></i>', label: "Build beside this scene", callback: guard(async (html) => buildUnder(read(html))) },
       remove: { icon: '<i class="fas fa-trash"></i>', label: "Remove NET here", callback: guard(async () => removeUnder()) },
       cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" },
     },
@@ -1178,17 +1201,6 @@ Hooks.once("ready", async () => {
     if (stuck.length) await scene.updateEmbeddedDocuments("Token", stuck, { cprNetarch: true }).catch(reportErr);
     const tilted = scene.tokens.filter((t) => t.getFlag(ID, "net") && !t.getFlag(ID, "avatarOf") && (t.rotation !== 0 || !t.lockRotation)).map((t) => ({ _id: t.id, rotation: 0, lockRotation: true }));
     if (tilted.length) await scene.updateEmbeddedDocuments("Token", tilted, { cprNetarch: true }).catch(reportErr);
-    const bare = scene.walls.filter((w) => !w.getFlag(ID, "net") && w.flags?.["wall-height"]?.bottom === undefined && w.flags?.["wall-height"]?.top === undefined)
-      .map((w) => ({ _id: w.id, "flags.wall-height": { bottom: -1, top: 999 }, [`flags.${ID}.floorWall`]: true }));
-    if (bare.length) await scene.updateEmbeddedDocuments("Wall", bare).catch(reportErr);
-    // NETs built before the floor picker entries existed get them now.
-    const levels = scene.getFlag("levels", "sceneLevels") ?? [];
-    if (!levels.some((l) => l?.[2] === "NET")) {
-      const next = [...levels];
-      if (!next.some((l) => Number(l[0]) <= 0 && Number(l[1]) >= 0)) next.push(["0", "8", "Floor"]);
-      next.push([String(NET_LEVEL.bottom), String(NET_LEVEL.top), "NET"]);
-      await scene.setFlag("levels", "sceneLevels", next).catch(reportErr);
-    }
   }
 });
 Hooks.once("ready", () => {

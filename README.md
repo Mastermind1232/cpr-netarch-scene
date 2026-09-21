@@ -15,7 +15,7 @@ A Foundry VTT module for the Cyberpunk RED system. It builds a new scene for a N
 
 ## Using it
 
-Open the Scenes tab and click "NET Architecture". Set a scene name and a difficulty. Either click Roll, which fills the floor list by the rulebook's method (3d6 floors, 1d10 per branch with 7 or higher branching, the Lobby table for floors 1 and 2, the Body table for the rest, with repeated Programs and Passwords rerolled), or build the list by hand: add a floor, pick what is on it from the dropdown, give a node a DV or leave it to the difficulty, add more pieces to the same floor, add a branch. Tick "edit as text" to work in the line format below instead. Then click Build scene, or Build under this scene.
+Open the Scenes tab and click "NET Architecture". Set a scene name and a difficulty. Either click Roll, which fills the floor list by the rulebook's method (3d6 floors, 1d10 per branch with 7 or higher branching, the Lobby table for floors 1 and 2, the Body table for the rest, with repeated Programs and Passwords rerolled), or build the list by hand: add a floor, pick what is on it from the dropdown, give a node a DV or leave it to the difficulty, add more pieces to the same floor, add a branch. Tick "edit as text" to work in the line format below instead. Then click Build scene, or Build beside this scene.
 
 One floor per line. A line holds any of these, separated by commas:
 
@@ -33,7 +33,7 @@ game.modules.get("cpr-netarch-scene").api.open();
 
 ## Building under a scene
 
-With the Levels and Wall Height modules active, the dialog's **Build under this scene** button lays the NET beneath the scene that is open instead of making a new one. The backdrop becomes a Levels tile between elevation -12 and -8, the room walls carry Wall Height ranges for that band, the node and ICE tokens sit at elevation -10, and a hidden **Access Point** token is placed at the centre of the GM's view, to be dragged wherever the floor's access point should be. Only a token at that elevation sees the NET; everyone else sees the floor. **Remove NET here** deletes everything a build placed, including any jacked-in tokens.
+With the Levels and Wall Height modules active, the dialog's **Build beside this scene** button lays the NET beneath the scene that is open instead of making a new one. The backdrop becomes a Levels tile between elevation -12 and -8, the room walls carry Wall Height ranges for that band, the node and ICE tokens sit at elevation -10, and a hidden **Access Point** token is placed at the centre of the GM's view, to be dragged wherever the floor's access point should be. Only a token at that elevation sees the NET; everyone else sees the floor. **Remove NET here** deletes everything a build placed, including any jacked-in tokens.
 
 Once the access point is revealed, a token owner standing within six metres of it gets a **Jack In** button on their token's right-click menu. Jack In makes a second token of that character, named with "(NET)", in the corridor at the NET elevation; the body stays where it is. The same button reads **Jack Out** while jacked in and removes the NET token. The GM's client does the creating and deleting on players' behalf, so a GM has to be online.
 
@@ -50,17 +50,9 @@ The **N** key (rebindable under Configure Controls) switches the viewer between 
 node test/harness.js
 ```
 
-## Floor walls and the NET
+## Building beside a scene
 
-Building under a scene gives every wall on the floor that has no Wall Height band a floor-only band (bottom −1, top 999), so the floor's walls stop cutting the NET's vision below. Remove NET undoes it. Walls you have already banded are left alone.
-
-## Fog of war
-
-Fog of war is one sheet per player shared by every level (a Levels limitation), so exploring the NET would mark the floor above as explored. While anyone is jacked in, the scene's fog exploration is paused; it resumes, with everything previously explored intact, when the last runner jacks out or the NET is removed.
-
-## Looking down as the GM
-
-Building under a scene adds a "NET" entry (and a "Floor" entry if none exists) to Levels' floor picker in the left toolbar, so the GM can view the NET layer without selecting a token. Removing the NET removes the entry.
+"Build beside this scene" grows the open scene downward by the NET backdrop's height plus one row, keeps the map at its natural size at the top (background fit switches to width), moves every document on the map down with it, and lays the NET in the new strip with a wall along the seam. Everything is plain 2D: no Levels, no Wall Height, no elevation. Remove NET deletes the NET, moves the map's documents back and restores the scene's height and background fit.
 
 ## Scanner
 
