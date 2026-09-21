@@ -677,6 +677,15 @@ async function shiftScene(scene, dy, done = null) {
     await mark(name);
   }
 }
+/** The scene fields a build changes, as they were before it. Older records only carry height and fit. */
+function restoreData(before) {
+  const data = { height: before.height };
+  if (before.src !== undefined) data["background.src"] = before.src;
+  if (before.color !== undefined) data.backgroundColor = before.color;
+  if (before.fit !== undefined) data["background.fit"] = before.fit;
+  if (before.anchorY !== undefined) data["background.anchorY"] = before.anchorY;
+  return data;
+}
 /** Undoes a build that never finished: restores the scene's size and moves back whatever had been moved. */
 async function repairPending(scene) {
   const pending = scene.getFlag(ID, "pending");
@@ -695,7 +704,7 @@ async function repairPending(scene) {
   const mine = scene.tokens.filter((t) => t.getFlag(ID, "net") === pending.tag).map((t) => t.id); if (mine.length) await scene.deleteEmbeddedDocuments("Token", mine);
   const mw = scene.walls.filter((w) => w.getFlag(ID, "net") === pending.tag).map((w) => w.id); if (mw.length) await scene.deleteEmbeddedDocuments("Wall", mw);
   const mt = scene.tiles.filter((t) => t.getFlag(ID, "net") === pending.tag).map((t) => t.id); if (mt.length) await scene.deleteEmbeddedDocuments("Tile", mt);
-  await scene.update({ height: pending.height, "background.fit": pending.fit, "background.anchorY": pending.anchorY });
+  await scene.update(restoreData(pending));
   await afterRedraw(scene);
   await scene.unsetFlag(ID, "pending");
   ui.notifications.info(`NET Architecture: an unfinished build on ${scene.name} was undone.`);
@@ -709,24 +718,34 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   if (await repairPending(scene)) return ui.notifications.warn("The last build had been interrupted and was undone. Build again.");
   const { arch, placed, art, backdrop, ids, need, tierDv } = await prepare({ tier, text, arch: rolled });
 
-  // Grow the scene downward by the NET backdrop plus a margin row, keep the map at its natural size at the top,
-  // and move everything already on the map down with it (document coordinates count from the padded canvas corner).
+  // Grow the scene downward by the NET backdrop plus a margin row and move everything already on the map down
+  // with it (document coordinates count from the padded canvas corner). Foundry v12 always stretches a scene's
+  // background image over the whole scene, so the map image becomes a locked tile at its real size instead.
   const g = scene.grid.size;
   const oldH = scene.height, mapRows = Math.ceil(oldH / g);
   const annexRows = Math.ceil(SCENE.height / G) + 1;
   const newH = mapRows * g + annexRows * g;
   // Let Foundry say where the map sits before and after: its padding rounding is its own business.
   const yBefore = scene.dimensions.sceneY;
-  const before = { height: oldH, fit: scene.background?.fit ?? "fill", anchorY: scene.background?.anchorY ?? 0, dy: 0 };
+  const src = scene.background?.src || null;
+  const before = { height: oldH, width: scene.width, src, color: scene.backgroundColor, dy: 0 };
   const tag = foundry.utils.randomID();
   await scene.setFlag(ID, "pending", { ...before, tag, shifted: [] });
-  await scene.update({ height: newH, "background.fit": "width", "background.anchorY": 0 });
+  await scene.update({ height: newH, "background.src": null, backgroundColor: "#000000" });
   await afterRedraw(scene);
   const dims = scene.dimensions;
   const dy = dims.sceneY - yBefore;
   before.dy = dy;
   await scene.setFlag(ID, "pending", { ...before, tag, shifted: [] });
   await shiftScene(scene, dy, []);
+  if (src) {
+    const map = tagged("tile", {
+      x: dims.sceneX, y: dims.sceneY, width: before.width, height: before.height, rotation: 0, alpha: 1,
+      texture: { src }, video: { loop: true, autoplay: true, volume: 0 }, locked: true, hidden: false, overhead: false, elevation: 0, sort: -1000,
+    }, { level: null, tag });
+    map.flags[ID].mapTile = true;
+    await scene.createEmbeddedDocuments("Tile", [map]);
+  }
 
   const padX = Math.round(dims.sceneX / g), padYnew = Math.round(dims.sceneY / g);
   const sp = { g, padX, padY: padYnew + mapRows + 1 };
@@ -771,7 +790,7 @@ async function removeUnder() {
   await scene.unsetFlag(ID, "net");
   if (net.beside) {
     await shiftScene(scene, -net.beside.dy);
-    await scene.update({ height: net.beside.height, "background.fit": net.beside.fit, "background.anchorY": net.beside.anchorY });
+    await scene.update(restoreData(net.beside));
     await afterRedraw(scene);
   }
   // Leftovers from NETs built under the map with Levels.
