@@ -790,6 +790,13 @@ async function concealAccessPoint(scene, t) {
   await t.update({ hidden: true, [`flags.${ID}.scanned`]: false }, { cprNetarch: true });
 }
 /* The GM's eye toggle on an access point flips it between found and not found. The token itself never shows. */
+/* Every client re-runs vision when a point is found or a token gains the sense, so the reveal shows without a nudge. */
+Hooks.on("updateToken", (doc, changes) => {
+  if (!canvas?.ready || doc.parent?.id !== canvas.scene?.id) return;
+  if ("detectionModes" in changes || (doc.getFlag(ID, "accessPoint") && ("hidden" in changes || foundry.utils.hasProperty(changes, `flags.${ID}.scanned`)))) {
+    canvas.perception.update({ refreshVision: true, refreshOcclusion: true });
+  }
+});
 Hooks.on("updateToken", (doc, changes, options, userId) => {
   if (!game.user.isGM || userId !== game.user.id || !doc.getFlag(ID, "accessPoint") || options?.cprNetarch) return;
   if (changes.hidden === false) revealAccessPoint(doc.parent, doc).catch(reportErr);
