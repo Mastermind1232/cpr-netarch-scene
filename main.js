@@ -1099,6 +1099,17 @@ function open() {
   }, { width: 720, height: "auto", resizable: true }).render(true);
 }
 
+/* Leftovers from earlier builds: pins from the map-pin experiment, and points marked found while still hidden. Cleared once, on the GM's load. */
+Hooks.once("ready", async () => {
+  if (!game.user.isGM) return;
+  for (const scene of game.scenes) {
+    if (!scene.getFlag(ID, "net")) continue;
+    const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id);
+    if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins).catch(reportErr);
+    const stuck = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && t.hidden && t.getFlag(ID, "scanned")).map((t) => ({ _id: t.id, [`flags.${ID}.scanned`]: false }));
+    if (stuck.length) await scene.updateEmbeddedDocuments("Token", stuck, { cprNetarch: true }).catch(reportErr);
+  }
+});
 Hooks.once("ready", () => {
   const mod = game.modules.get(ID);
   if (mod) mod.api = { open, build, buildUnder, removeUnder, toggle: toggleView, roll: rollArchitecture, parse: parseText, toText, layout, ICE, DEMONS };
