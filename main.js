@@ -780,6 +780,29 @@ function registerSense() {
     ui.notifications?.error?.(`NET builder: could not register the access point sense (${err.message}).`);
   }
 }
+/* Belt and braces: whatever happens to the detection-mode table, a found access point on the viewer's own level passes the
+   visibility test. Registered through libWrapper so Levels' own wrapper of the same method keeps working. */
+const isFoundPoint = (d) => Boolean(d?.getFlag?.(ID, "accessPoint") && d.getFlag(ID, "scanned") && !d.hidden);
+function viewerOnLevel(d) {
+  const target = d.elevation ?? 0;
+  for (const src of canvas.effects?.visionSources ?? []) {
+    if (!src.active) continue;
+    const e = src.elevation ?? src.object?.document?.elevation ?? 0;
+    if (Math.abs(e - target) < 2) return true;
+  }
+  return false;
+}
+Hooks.once("setup", () => {
+  if (!globalThis.libWrapper) return console.warn(`${ID} | libWrapper missing; found access points rely on the detection mode alone.`);
+  try {
+    libWrapper.register(ID, "CONFIG.Canvas.groups.visibility.groupClass.prototype.testVisibility", function (wrapped, point, options = {}) {
+      const d = options?.object?.document;
+      if (isFoundPoint(d) && viewerOnLevel(d)) return true;
+      return wrapped(point, options);
+    }, "MIXED");
+  } catch (err) { console.error(`${ID} | could not wrap testVisibility`, err); }
+});
+
 /** Gives every player-owned character token on the scene the sense, so the crew sees what their runner found. */
 async function grantSense(scene) {
   registerSense();
