@@ -769,6 +769,8 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
   await scene.setFlag(ID, "net", { tag, sp, entry, level: { bottom: 0, top: 0, elev: 0 }, beside: before, scanDv: 6, ...record });
   await scene.unsetFlag(ID, "pending");
+  // Walls moved while the canvas was still settling leave their door icons behind; a clean draw clears them.
+  if (canvas?.scene?.id === scene.id) await canvas.draw();
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden at the centre of your view; drag it where it belongs.`);
 }
@@ -792,6 +794,7 @@ async function removeUnder() {
     await shiftScene(scene, -net.beside.dy);
     await scene.update(restoreData(net.beside));
     await afterRedraw(scene);
+    if (canvas?.scene?.id === scene.id) await canvas.draw();
   }
   // Leftovers from NETs built under the map with Levels.
   if (scene.getFlag(ID, "fogWas") !== undefined) { await scene.update({ "fog.exploration": true }); await scene.unsetFlag(ID, "fogWas"); }
