@@ -545,8 +545,8 @@ Hooks.once("init", () => {
     default: "https://assets.forge-vtt.com/6a7ca306f6a96908b438164c/NuNu/Tiles/NetArch",
   });
   game.keybindings.register(ID, "toggle", {
-    name: "Switch between floor and NET",
-    hint: "Jumps your view and selection between your body and your jacked-in token.",
+    name: "Jack in, or switch between floor and NET",
+    hint: "Not jacked in: jacks you in if a found access point is within 6 metres. Jacked in: jumps your view between your body and your NET token.",
     editable: [{ key: "KeyJ", modifiers: ["Shift"] }],
     onDown: () => { toggleView().catch(reportErr); return true; },
   });
@@ -924,7 +924,12 @@ async function toggleView() {
   if (!current) return ui.notifications.warn("You have no token on this scene.");
   const bodyId = bodyIdOf(current);
   const target = current.id === bodyId ? avatarOf(scene, bodyId) : scene.tokens.get(bodyId);
-  if (!target) return ui.notifications.warn(current.id === bodyId ? "You are not jacked in." : "Your body is not on this scene.");
+  if (!target && current.id === bodyId) {
+    if (!scene.getFlag(ID, "net")) return ui.notifications.warn("There is no NET architecture here.");
+    if (!nearAccessPoint(current)) return ui.notifications.warn("There is no NET access point within 6 metres.");
+    return requestJack("jackIn", scene, bodyId);
+  }
+  if (!target) return ui.notifications.warn("Your body is not on this scene.");
   target.object?.control({ releaseOthers: true });
   const g = scene.grid.size;
   await canvas.animatePan({ x: target.x + (target.width * g) / 2, y: target.y + (target.height * g) / 2, duration: 250 });
