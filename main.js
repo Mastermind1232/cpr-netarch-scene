@@ -920,6 +920,24 @@ async function toggleView() {
   await canvas.animatePan({ x: target.x + (target.width * g) / 2, y: target.y + (target.height * g) / 2, duration: 250 });
 }
 
+/* Double-clicking a found access point jacks you in, if your body is within 6 metres. Replaces the "no actor" warning. */
+Hooks.once("ready", () => {
+  const proto = CONFIG.Token.objectClass.prototype;
+  const handler = function (wrapped, ...args) {
+    const d = this.document;
+    if (!d?.getFlag(ID, "accessPoint")) return wrapped(...args);
+    const scene = d.parent;
+    if (!d.getFlag(ID, "scanned") || d.hidden) { ui.notifications.warn("This access point has not been revealed."); return; }
+    const body = scene.tokens.find((t) => t.isOwner && !t.getFlag(ID, "avatarOf") && !t.getFlag(ID, "accessPoint") && nearAccessPoint(t))
+      ?? null;
+    if (!body) { ui.notifications.warn("Your body is not within 6 metres of this access point."); return; }
+    if (avatarOf(scene, body.id)) { toggleView().catch(reportErr); return; }
+    requestJack("jackIn", scene, body.id);
+  };
+  if (globalThis.libWrapper) libWrapper.register(ID, "CONFIG.Token.objectClass.prototype._onClickLeft2", handler, "MIXED");
+  else { const orig = proto._onClickLeft2; proto._onClickLeft2 = function (...args) { return handler.call(this, orig.bind(this), ...args); }; }
+});
+
 Hooks.on("renderTokenHUD", (hud, html) => {
   try {
     const root = html instanceof HTMLElement ? html : html[0];
