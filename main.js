@@ -677,6 +677,11 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   await scene.createEmbeddedDocuments("Wall", docs.walls);
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
   await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, scanDv: 6, ...record });
+  // Put the NET on Levels' floor picker so the GM can look down without selecting a token.
+  const levels = (scene.getFlag("levels", "sceneLevels") ?? []).filter((l) => l?.[2] !== "NET");
+  if (!levels.some((l) => Number(l[0]) <= 0 && Number(l[1]) >= 0)) levels.push(["0", "8", "Floor"]);
+  levels.push([String(NET_LEVEL.bottom), String(NET_LEVEL.top), "NET"]);
+  await scene.setFlag("levels", "sceneLevels", levels);
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`NET laid under ${scene.name}: ${floors.length} floors at elevation ${NET_LEVEL.elev}. The access point is hidden at the centre of your view; drag it where it belongs.`);
 }
@@ -693,6 +698,8 @@ async function removeUnder() {
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
   const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id); if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins);
   await scene.unsetFlag(ID, "net");
+  const levels = (scene.getFlag("levels", "sceneLevels") ?? []).filter((l) => l?.[2] !== "NET");
+  await scene.setFlag("levels", "sceneLevels", levels);
   ui.notifications.info(`NET removed from ${scene.name}.`);
 }
 

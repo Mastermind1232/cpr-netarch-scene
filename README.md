@@ -50,6 +50,10 @@ The **N** key (rebindable under Configure Controls) switches the viewer between 
 node test/harness.js
 ```
 
+## Looking down as the GM
+
+Building under a scene adds a "NET" entry (and a "Floor" entry if none exists) to Levels' floor picker in the left toolbar, so the GM can view the NET layer without selecting a token. Removing the NET removes the entry.
+
 ## Scanner
 
 Shift+S (or the dish button on the token HUD) is the Scanner Meat Action. It runs the system's own Interface check (the CPR roll dialog with mods and LUCK, 3D dice, the CPR roll card) against DV 6 by default (stored per scene as `scanDv` in the NET flag, editable). Every Scan posts the roll card and a one-line outcome to chat, without the DV. Jack In and Jack Out post a one-line notice. On a success the nearest unfound access point is revealed and every player character on the scene gains a detection mode that senses found access points through walls, on their own level only, so it never shows from inside the NET. The GM's eye toggle on a point flips it between found and not found. The check must be made from the body, not the NET avatar.
