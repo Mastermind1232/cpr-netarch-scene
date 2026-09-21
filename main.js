@@ -705,6 +705,7 @@ async function removeUnder() {
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
   const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id); if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins);
   await scene.unsetFlag(ID, "net");
+  if (scene.getFlag(ID, "fogWas") !== undefined) { await scene.update({ "fog.exploration": true }); await scene.unsetFlag(ID, "fogWas"); }
   const levels = (scene.getFlag("levels", "sceneLevels") ?? []).filter((l) => l?.[2] !== "NET");
   await scene.setFlag("levels", "sceneLevels", levels);
   ui.notifications.info(`NET removed from ${scene.name}.`);
@@ -741,6 +742,11 @@ async function jackIn(scene, bodyId) {
   data.sight = { ...(data.sight ?? {}), enabled: true };
   data.flags = { ...(data.flags ?? {}), [ID]: { avatarOf: bodyId, net: net.tag } };
   await scene.createEmbeddedDocuments("Token", [data]);
+  // Fog of war is one sheet for every level, so pause fog memory while anyone is jacked in. Restored on the last jack out.
+  if (scene.fog?.exploration && scene.getFlag(ID, "fogWas") === undefined) {
+    await scene.setFlag(ID, "fogWas", true);
+    await scene.update({ "fog.exploration": false });
+  }
   await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks in.</b>` });
 }
 
@@ -749,7 +755,12 @@ async function jackOut(scene, bodyId) {
   const body = scene.tokens.get(bodyId);
   avatar?.object?.release?.();
   if (avatar && body) await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks out.</b>` });
-  if (avatar) await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
+  if (!avatar) return;
+  await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
+  if (!scene.tokens.some((t) => t.getFlag(ID, "avatarOf")) && scene.getFlag(ID, "fogWas") !== undefined) {
+    await scene.update({ "fog.exploration": true });
+    await scene.unsetFlag(ID, "fogWas");
+  }
 }
 
 /** Players cannot create or delete tokens, so the GM's client does it for them. */
