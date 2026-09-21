@@ -777,7 +777,37 @@ async function checkDie() {
   return { total, note };
 }
 
-/** The Scanner Meat Action: Interface + 1d10 against the architecture's DV. Success reveals the nearest hidden access point. */
+/** Runs the system's own Interface check for a role item: the CPR roll dialog, 3D dice, LUCK spend and the CPR roll card.
+ *  Falls back to a bare d10 if the system's roll pipeline is not where we expect it. Returns the total, or null if cancelled. */
+async function interfaceCheck(actor, token, role) {
+  try {
+    const cprRoll = role.createRoll("roleAbility", actor, { rollSubType: "mainRoleAbility" });
+    const keep = await cprRoll.handleRollDialog({ type: "keydown", ctrlKey: false, metaKey: false }, actor, role);
+    if (!keep) return null;
+    await cprRoll.roll();
+    if (Number.isInteger(cprRoll.luck) && cprRoll.luck > 0) {
+      const luck = actor.system.stats.luck.value;
+      await actor.update({ "system.stats.luck.value": luck - Math.min(luck, cprRoll.luck) });
+    }
+    cprRoll.entityData = { actor: actor.id, token: token.id, tokens: [], item: role.id };
+    cprRoll.criticalCard = cprRoll.wasCritical();
+    const content = await renderTemplate(cprRoll.rollCard, cprRoll);
+    const rollMode = game.settings.get("core", "rollMode");
+    const chatData = { user: game.user.id, rollMode, content, sound: CONFIG.sounds.dice, speaker: ChatMessage.getSpeaker({ actor, token }) };
+    if (["gmroll", "blindroll"].includes(rollMode)) chatData.whisper = ChatMessage.getWhisperRecipients("GM").map((u) => u.id);
+    if (rollMode === "blindroll") chatData.blind = true; else if (rollMode === "selfroll") chatData.whisper = [game.user.id];
+    await ChatMessage.create(chatData);
+    return Number(cprRoll.resultTotal);
+  } catch (err) {
+    console.warn(`${ID} | system roll pipeline unavailable, rolling a plain d10`, err);
+    const die = await checkDie();
+    const rank = Number(role?.system?.rank) || 0;
+    await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor, token }), content: `<b>Interface</b> ${rank} + d10 ${die.total}${die.note} = <b>${rank + die.total}</b>` });
+    return rank + die.total;
+  }
+}
+
+/** The Scanner Meat Action: an Interface check against the scene's Scanner DV. Success reveals the nearest hidden access point. */
 async function scanner() {
   const scene = canvas?.scene;
   if (!scene?.getFlag(ID, "net")) return ui.notifications.warn("There is no NET architecture under this scene.");
@@ -786,23 +816,23 @@ async function scanner() {
   if (token.getFlag(ID, "avatarOf")) return ui.notifications.warn("Scanner is a Meat Action. Do it from your body, not the NET.");
   const actor = token.actor;
   const role = actor?.items?.find((i) => i.type === "role" && (String(i.system?.mainRoleAbility ?? "").toLowerCase() === "interface" || /netrunner/i.test(i.name)));
-  const rank = Number(role?.system?.rank) || 0;
   if (!role) return ui.notifications.warn(`${actor?.name ?? "This token"} has no Netrunner role to Scan with.`);
   const dv = scanDv(scene);
   const hidden = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && t.hidden)
     .sort((a, b) => Math.hypot(a.x - token.x, a.y - token.y) - Math.hypot(b.x - token.x, b.y - token.y));
-  const die = await checkDie();
-  const total = rank + die.total, ok = total > dv;
+  const total = await interfaceCheck(actor, token, role);
+  if (total === null) return;
+  const ok = total > dv;
   const found = ok && hidden.length ? hidden[0] : null;
   const g = scene.grid.size, per = scene.grid.distance || 2;
-  const dist = found ? Math.max(per, Math.ceil((Math.hypot(found.x - token.x, found.y - token.y) / g) * per / per) * per) : 0;
+  const dist = found ? Math.max(per, Math.ceil((Math.hypot(found.x - token.x, found.y - token.y) / g)) * per) : 0;
   const name = actor?.name ?? token.name;
   const result = ok ? (found ? `There is an access point within ${dist} metres.` : `Nothing here they have not already found.`) : `Unable to identify nearby access points.`;
-  const line = `<b>${name} uses their Scanner.</b> Interface ${rank} + ${die.total}${die.note} = ${total}. ${result}`;
+  const line = `<b>${name} uses their Scanner.</b> ${result}`;
   const scannedBy = scene.getFlag(ID, "scannedBy") ?? [];
   const key = actor?.id ?? token.id;
   if (!scannedBy.includes(key)) {
-    await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content: `<div class="cpr-netarch-scan">${line}</div>` });
+    await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor, token }), content: `<div class="cpr-netarch-scan">${line}</div>` });
     if (game.user.isGM) await scene.setFlag(ID, "scannedBy", [...scannedBy, key]);
     else game.socket.emit(SOCKET, { action: "scanned", sceneId: scene.id, key });
   } else ui.notifications.info(line.replace(/<[^>]+>/g, ""));
