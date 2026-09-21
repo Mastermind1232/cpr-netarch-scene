@@ -797,7 +797,7 @@ async function scanner() {
   const g = scene.grid.size, per = scene.grid.distance || 2;
   const dist = found ? Math.max(per, Math.ceil((Math.hypot(found.x - token.x, found.y - token.y) / g) * per / per) * per) : 0;
   const name = actor?.name ?? token.name;
-  const result = ok ? (found ? `There is an access point within ${dist} metres.` : `Nothing here they have not already found.`) : `Nothing.`;
+  const result = ok ? (found ? `There is an access point within ${dist} metres.` : `Nothing here they have not already found.`) : `Unable to identify nearby access points.`;
   const line = `<b>${name} uses their Scanner.</b> Interface ${rank} + ${die.total}${die.note} = ${total}. ${result}`;
   const scannedBy = scene.getFlag(ID, "scannedBy") ?? [];
   const key = actor?.id ?? token.id;
