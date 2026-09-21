@@ -768,9 +768,11 @@ function registerSense() {
     if (!DM) throw new Error("DetectionMode class not found");
     class AccessPointSense extends DM {
       static getDetectionFilter() {
-        const F = typeof OutlineOverlayFilter !== "undefined" ? OutlineOverlayFilter : foundry.canvas?.rendering?.filters?.OutlineOverlayFilter;
-        if (!F) return undefined;
-        return (this._detectionFilter ??= F.create({ outlineColor: [0.4, 1, 0.8, 1], thickness: 2, knockout: false, wave: false }));
+        // Same call core makes for its own "See All" mode; anything fancier risks a shader error that blacks out the canvas.
+        try {
+          const F = typeof OutlineOverlayFilter !== "undefined" ? OutlineOverlayFilter : foundry.canvas?.rendering?.filters?.OutlineOverlayFilter;
+          return F ? (this._detectionFilter ??= F.create({ knockout: false, wave: false })) : undefined;
+        } catch (err) { console.warn(`${ID} | detection filter unavailable`, err); return undefined; }
       }
       _canDetect(visionSource, target) {
         const d = target?.document;
