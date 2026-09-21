@@ -50,6 +50,10 @@ The **N** key (rebindable under Configure Controls) switches the viewer between 
 node test/harness.js
 ```
 
+## Floor walls and the NET
+
+Building under a scene gives every wall on the floor that has no Wall Height band a floor-only band (bottom −1, top 999), so the floor's walls stop cutting the NET's vision below. Remove NET undoes it. Walls you have already banded are left alone.
+
 ## Looking down as the GM
 
 Building under a scene adds a "NET" entry (and a "Floor" entry if none exists) to Levels' floor picker in the left toolbar, so the GM can view the NET layer without selecting a token. Removing the NET removes the entry.

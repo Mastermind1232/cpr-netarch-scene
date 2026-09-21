@@ -673,6 +673,11 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   }, { level: { elev: 0 }, tag });
   ap.flags[ID].accessPoint = true;
 
+  // The floor's own walls have no height, so Wall Height treats them as bottomless and they cut the NET's vision.
+  // Give every unflagged wall a floor-only band, and remember which ones we touched so Remove NET can undo it.
+  const floorWalls = scene.walls.filter((w) => !w.getFlag(ID, "net") && w.flags?.["wall-height"]?.bottom === undefined && w.flags?.["wall-height"]?.top === undefined)
+    .map((w) => ({ _id: w.id, "flags.wall-height": { bottom: -1, top: 999 }, [`flags.${ID}.floorWall`]: true }));
+  if (floorWalls.length) await scene.updateEmbeddedDocuments("Wall", floorWalls);
   await scene.createEmbeddedDocuments("Tile", docs.tiles);
   await scene.createEmbeddedDocuments("Wall", docs.walls);
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
@@ -695,6 +700,8 @@ async function removeUnder() {
   const tokens = scene.tokens.filter((t) => t.getFlag(ID, "net") === net.tag || t.getFlag(ID, "avatarOf")).map((t) => t.id);
   if (tokens.length) await scene.deleteEmbeddedDocuments("Token", tokens);
   const walls = mine(scene.walls); if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls);
+  const touched = scene.walls.filter((w) => w.getFlag(ID, "floorWall")).map((w) => ({ _id: w.id, "flags.-=wall-height": null, [`flags.${ID}.-=floorWall`]: null }));
+  if (touched.length) await scene.updateEmbeddedDocuments("Wall", touched);
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
   const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id); if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins);
   await scene.unsetFlag(ID, "net");
@@ -1160,6 +1167,9 @@ Hooks.once("ready", async () => {
     if (stuck.length) await scene.updateEmbeddedDocuments("Token", stuck, { cprNetarch: true }).catch(reportErr);
     const tilted = scene.tokens.filter((t) => t.getFlag(ID, "net") && !t.getFlag(ID, "avatarOf") && (t.rotation !== 0 || !t.lockRotation)).map((t) => ({ _id: t.id, rotation: 0, lockRotation: true }));
     if (tilted.length) await scene.updateEmbeddedDocuments("Token", tilted, { cprNetarch: true }).catch(reportErr);
+    const bare = scene.walls.filter((w) => !w.getFlag(ID, "net") && w.flags?.["wall-height"]?.bottom === undefined && w.flags?.["wall-height"]?.top === undefined)
+      .map((w) => ({ _id: w.id, "flags.wall-height": { bottom: -1, top: 999 }, [`flags.${ID}.floorWall`]: true }));
+    if (bare.length) await scene.updateEmbeddedDocuments("Wall", bare).catch(reportErr);
     // NETs built before the floor picker entries existed get them now.
     const levels = scene.getFlag("levels", "sceneLevels") ?? [];
     if (!levels.some((l) => l?.[2] === "NET")) {
