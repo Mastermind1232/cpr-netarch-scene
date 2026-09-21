@@ -763,7 +763,8 @@ const SENSE = "cprNetarchAccess";
 function registerSense() {
   try {
     if (CONFIG.Canvas.detectionModes[SENSE]) return;
-    const DM = globalThis.DetectionMode ?? foundry.canvas?.perception?.DetectionMode;
+    // Foundry declares its client classes as top-level bindings, not window properties: reach it by name, not through globalThis.
+    const DM = (typeof DetectionMode !== "undefined" ? DetectionMode : null) ?? foundry.canvas?.perception?.DetectionMode ?? globalThis.DetectionMode;
     if (!DM) throw new Error("DetectionMode class not found");
     class AccessPointSense extends DM {
       _canDetect(visionSource, target) {
