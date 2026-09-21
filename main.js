@@ -686,6 +686,7 @@ async function removeUnder() {
   if (tokens.length) await scene.deleteEmbeddedDocuments("Token", tokens);
   const walls = mine(scene.walls); if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls);
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
+  const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id); if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins);
   await scene.unsetFlag(ID, "net");
   ui.notifications.info(`NET removed from ${scene.name}.`);
 }
@@ -705,7 +706,7 @@ function nearAccessPoint(token) {
   const g = scene.grid.size;
   const perSquare = scene.grid.distance || 2;
   const reach = (6 / perSquare) * g + g / 2;
-  return scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && !t.hidden && Math.hypot(t.x - token.x, t.y - token.y) <= reach);
+  return scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && t.getFlag(ID, "scanned") && Math.hypot(t.x - token.x, t.y - token.y) <= reach);
 }
 
 async function jackIn(scene, bodyId) {
@@ -738,12 +739,7 @@ async function handleSocket(msg) {
   if (!scene) return;
   if (msg.action === "jackIn") await jackIn(scene, msg.bodyId);
   if (msg.action === "jackOut") await jackOut(scene, msg.bodyId);
-  if (msg.action === "reveal") {
-    const t = scene.tokens.get(msg.tokenId);
-    if (!t?.getFlag(ID, "accessPoint")) return;
-    await t.update({ hidden: false, [`flags.${ID}.scanned`]: true });
-    scene.tokens.get(t.id)?.object?.refresh();
-  }
+  if (msg.action === "reveal") await revealAccessPoint(scene, scene.tokens.get(msg.tokenId));
 }
 
 async function requestJack(action, scene, bodyId) {
@@ -755,6 +751,33 @@ async function requestJack(action, scene, bodyId) {
 
 /** The body of a token, whether it is the body itself or its avatar. */
 const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
+
+/* An access point stays a hidden token; what the players see once it is found is a map pin on the same spot.
+   Pins ignore walls and fog, and Levels reads their elevation range, so the pin shows on the floor and never from inside the NET. */
+const pinOf = (scene, tokenId) => scene.notes.find((n) => n.getFlag(ID, "accessPin") === tokenId) ?? null;
+async function revealAccessPoint(scene, t) {
+  if (!t?.getFlag(ID, "accessPoint")) return;
+  const g = scene.grid.size;
+  if (!pinOf(scene, t.id)) {
+    await scene.createEmbeddedDocuments("Note", [{ x: t.x + (t.width * g) / 2, y: t.y + (t.height * g) / 2, elevation: 0,
+      texture: { src: t.texture?.src || "icons/svg/net.svg", tint: t.texture?.tint || "#66ffcc" }, iconSize: 48, text: "Access Point", fontSize: 20, textAnchor: 1, global: true,
+      flags: { [ID]: { accessPin: t.id, net: t.getFlag(ID, "net") }, levels: { rangeTop: 4 } } }]);
+  }
+  await t.update({ hidden: true, [`flags.${ID}.scanned`]: true }, { cprNetarch: true });
+}
+async function concealAccessPoint(scene, t) {
+  if (!t?.getFlag(ID, "accessPoint")) return;
+  const pin = pinOf(scene, t.id);
+  if (pin) await scene.deleteEmbeddedDocuments("Note", [pin.id]);
+  await t.update({ hidden: true, [`flags.${ID}.scanned`]: false }, { cprNetarch: true });
+}
+/* The GM's eye toggle on an access point flips it between found and not found. The token itself never shows. */
+Hooks.on("updateToken", (doc, changes, options, userId) => {
+  if (!game.user.isGM || userId !== game.user.id || !doc.getFlag(ID, "accessPoint") || options?.cprNetarch) return;
+  if (changes.hidden !== false) return;
+  const scene = doc.parent;
+  (doc.getFlag(ID, "scanned") ? concealAccessPoint(scene, doc) : revealAccessPoint(scene, doc)).catch(reportErr);
+});
 
 /** The DV a Scanner check needs here: the architecture's tier DV, read from the build record. */
 function scanDv(scene) {
@@ -813,7 +836,7 @@ async function scanner() {
   const role = actor?.items?.find((i) => i.type === "role" && (String(i.system?.mainRoleAbility ?? "").toLowerCase() === "interface" || /netrunner/i.test(i.name)));
   if (!role) return ui.notifications.warn(`${actor?.name ?? "This token"} has no Netrunner role to Scan with.`);
   const dv = scanDv(scene);
-  const hidden = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && t.hidden)
+  const hidden = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && !t.getFlag(ID, "scanned"))
     .sort((a, b) => Math.hypot(a.x - token.x, a.y - token.y) - Math.hypot(b.x - token.x, b.y - token.y));
   const total = await interfaceCheck(actor, token, role);
   if (total === null) return;
@@ -847,20 +870,6 @@ async function toggleView() {
   const g = scene.grid.size;
   await canvas.animatePan({ x: target.x + (target.width * g) / 2, y: target.y + (target.height * g) / 2, duration: 250 });
 }
-
-/* A scanned access point is seen through walls, but only from its own level: Scanner gives the location, not a view.
-   Registered through libWrapper so Levels' own isVisible wrapper keeps working; without libWrapper the point is only seen by line of sight. */
-Hooks.once("setup", () => {
-  if (!globalThis.libWrapper) { console.warn(`${ID} | libWrapper missing; scanned access points will not show through walls.`); return; }
-  libWrapper.register(ID, "CONFIG.Token.objectClass.prototype.isVisible", function (wrapped, ...args) {
-    const d = this.document;
-    if (d?.getFlag(ID, "accessPoint") && d.getFlag(ID, "scanned") && !d.hidden) {
-      const viewer = CONFIG.Levels?.currentToken?.document ?? canvas.tokens?.controlled[0]?.document;
-      if (viewer && Math.abs((viewer.elevation ?? 0) - (d.elevation ?? 0)) < 1) return true;
-    }
-    return wrapped(...args);
-  }, "MIXED");
-});
 
 Hooks.on("renderTokenHUD", (hud, html) => {
   try {
