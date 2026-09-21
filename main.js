@@ -725,6 +725,7 @@ async function jackIn(scene, bodyId) {
 
 async function jackOut(scene, bodyId) {
   const avatar = avatarOf(scene, bodyId);
+  avatar?.object?.release?.();
   if (avatar) await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
 }
 
@@ -791,7 +792,7 @@ async function scanner() {
   const dist = found ? Math.round((Math.hypot(found.x - token.x, found.y - token.y) / g) * per) : 0;
   await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content:
     `<div class="cpr-netarch-scan"><b>Scanner</b> · Interface ${rank} + d10 ${die.total}${die.note} = <b>${total}</b> vs DV ${dv}: ` +
-    (ok ? (found ? `<b>success.</b> An access point, about ${dist} m away.` : `<b>success.</b> Nothing new in range.`) : `<b>failure.</b>`) + `</div>` });
+    (ok ? (found ? `<b>success.</b> An access point, about ${dist} m away.` : `<b>success.</b> Nothing you have not already found.`) : `<b>failure.</b>`) + `</div>` });
   if (!found) return;
   const msg = { action: "reveal", sceneId: scene.id, tokenId: found.id };
   if (game.user.isGM) return handleSocket(msg);
@@ -840,7 +841,8 @@ Hooks.on("renderTokenHUD", (hud, html) => {
     const body = scene.tokens.get(bodyId);
     if (!body || token.getFlag(ID, "accessPoint")) return;
     const jacked = !!avatarOf(scene, bodyId);
-    if (!jacked && token.id === bodyId && scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && t.hidden)) {
+    const runner = token.actor?.items?.some((i) => i.type === "role" && (String(i.system?.mainRoleAbility ?? "").toLowerCase() === "interface" || /netrunner/i.test(i.name)));
+    if (!jacked && token.id === bodyId && runner) {
       const sb = document.createElement("div");
       sb.className = "control-icon cpr-netarch-scan";
       sb.title = "Scanner (Shift+S)";
