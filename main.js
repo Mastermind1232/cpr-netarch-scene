@@ -547,7 +547,7 @@ Hooks.once("init", () => {
   });
   game.keybindings.register(ID, "scan", {
     name: "Scanner",
-    hint: "The Scanner Meat Action: Interface + 1d10 against the architecture's DV. A success reveals the nearest hidden access point.",
+    hint: "The Scanner Meat Action: Interface + 1d10 against DV 9 (set per scene in the NET flag). A success reveals the nearest hidden access point.",
     editable: [{ key: "KeyS", modifiers: ["Shift"] }],
     onDown: () => { scanner().catch(reportErr); return true; },
   });
@@ -671,7 +671,7 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   await scene.createEmbeddedDocuments("Tile", docs.tiles);
   await scene.createEmbeddedDocuments("Wall", docs.walls);
   await scene.createEmbeddedDocuments("Token", [...docs.tokens, ap]);
-  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, scanDv: tierDv ?? null, ...record });
+  await scene.setFlag(ID, "net", { tag, sp, entry, level: NET_LEVEL, scanDv: 9, ...record });
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`NET laid under ${scene.name}: ${floors.length} floors at elevation ${NET_LEVEL.elev}. The access point is hidden at the centre of your view; drag it where it belongs.`);
 }
@@ -757,9 +757,7 @@ const bodyIdOf = (token) => token.getFlag(ID, "avatarOf") ?? token.id;
 function scanDv(scene) {
   const net = scene.getFlag(ID, "net");
   if (!net) return null;
-  if (Number.isInteger(net.scanDv)) return net.scanDv;
-  for (const f of net.floors ?? []) { const m = /DV\s*(\d+)/i.exec(f.text ?? ""); if (m) return Number(m[1]); }
-  return 8;
+  return Number.isInteger(net.scanDv) ? net.scanDv : 9;
 }
 
 /** A Cyberpunk RED check die: d10, exploding on a 10, imploding on a 1. */

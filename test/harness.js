@@ -294,16 +294,10 @@ check("T11 summary html lists every floor and each ICE's stats once", () => {
 
 // T15: scanDv reads the stored tier DV, else the first DV in the floor text, else 8.
 {
-  const scanDv = (net) => {
-    if (!net) return null;
-    if (Number.isInteger(net.scanDv)) return net.scanDv;
-    for (const f of net.floors ?? []) { const m = /DV\s*(\d+)/i.exec(f.text ?? ""); if (m) return Number(m[1]); }
-    return 8;
-  };
+  const scanDv = (net) => (!net ? null : Number.isInteger(net.scanDv) ? net.scanDv : 9);
   check("T15 scanDv", () => {
-    assert(scanDv({ scanDv: 6, floors: [{ text: "Password DV12" }] }) === 6, "stored");
-    assert(scanDv({ floors: [{ text: "Wisp" }, { text: "File DV10" }] }) === 10, "from text");
-    assert(scanDv({ floors: [{ text: "Wisp" }] }) === 8, "default");
+    assert(scanDv({ scanDv: 6 }) === 6, "stored");
+    assert(scanDv({ floors: [{ text: "File DV10" }] }) === 9, "default 9");
   });
 }
 
