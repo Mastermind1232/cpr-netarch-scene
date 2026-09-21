@@ -815,17 +815,18 @@ async function toggleView() {
   await canvas.animatePan({ x: target.x + (target.width * g) / 2, y: target.y + (target.height * g) / 2, duration: 250 });
 }
 
-/* A scanned access point is seen through walls: Scanner gives the location, not a view. */
-Hooks.once("ready", () => {
-  const proto = CONFIG.Token.objectClass.prototype;
-  const desc = Object.getOwnPropertyDescriptor(proto, "isVisible");
-  if (!desc?.get || proto.__cprNetarchVisible) return;
-  proto.__cprNetarchVisible = true;
-  Object.defineProperty(proto, "isVisible", { configurable: true, get() {
+/* A scanned access point is seen through walls, but only from its own level: Scanner gives the location, not a view.
+   Registered through libWrapper so Levels' own isVisible wrapper keeps working; without libWrapper the point is only seen by line of sight. */
+Hooks.once("setup", () => {
+  if (!globalThis.libWrapper) { console.warn(`${ID} | libWrapper missing; scanned access points will not show through walls.`); return; }
+  libWrapper.register(ID, "CONFIG.Token.objectClass.prototype.isVisible", function (wrapped, ...args) {
     const d = this.document;
-    if (d?.getFlag(ID, "accessPoint") && d.getFlag(ID, "scanned") && !d.hidden) return true;
-    return desc.get.call(this);
-  } });
+    if (d?.getFlag(ID, "accessPoint") && d.getFlag(ID, "scanned") && !d.hidden) {
+      const viewer = CONFIG.Levels?.currentToken?.document ?? canvas.tokens?.controlled[0]?.document;
+      if (viewer && Math.abs((viewer.elevation ?? 0) - (d.elevation ?? 0)) < 1) return true;
+    }
+    return wrapped(...args);
+  }, "MIXED");
 });
 
 Hooks.on("renderTokenHUD", (hud, html) => {
