@@ -530,6 +530,8 @@ Hooks.once("init", () => {
   registerSense();
   Hooks.once("setup", registerSense);
   Hooks.once("ready", registerSense);
+  Hooks.on("canvasReady", registerSense);
+  Hooks.on("renderTokenConfig", registerSense);
   game.settings.register(ID, "backdrop", {
     name: "Backdrop",
     hint: "Path or URL of the Net Archive video every architecture is built on (3840x2160, 150px grid).",
@@ -775,10 +777,12 @@ function registerSense() {
     console.log(`${ID} | registered detection mode ${SENSE}`);
   } catch (err) {
     console.error(`${ID} | could not register the access point sense; found points will only show in line of sight`, err);
+    ui.notifications?.error?.(`NET builder: could not register the access point sense (${err.message}).`);
   }
 }
 /** Gives every player-owned character token on the scene the sense, so the crew sees what their runner found. */
 async function grantSense(scene) {
+  registerSense();
   const updates = [];
   for (const t of scene.tokens) {
     if (t.getFlag(ID, "accessPoint") || t.getFlag(ID, "avatarOf")) continue;
