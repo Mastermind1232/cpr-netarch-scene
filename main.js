@@ -687,6 +687,7 @@ async function removeUnder() {
   const walls = mine(scene.walls); if (walls.length) await scene.deleteEmbeddedDocuments("Wall", walls);
   const tiles = mine(scene.tiles); if (tiles.length) await scene.deleteEmbeddedDocuments("Tile", tiles);
   await scene.unsetFlag(ID, "net");
+  await scene.unsetFlag(ID, "scannedBy");
   ui.notifications.info(`NET removed from ${scene.name}.`);
 }
 
@@ -721,11 +722,14 @@ async function jackIn(scene, bodyId) {
   data.sight = { ...(data.sight ?? {}), enabled: true };
   data.flags = { ...(data.flags ?? {}), [ID]: { avatarOf: bodyId, net: net.tag } };
   await scene.createEmbeddedDocuments("Token", [data]);
+  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks in.</b>` });
 }
 
 async function jackOut(scene, bodyId) {
   const avatar = avatarOf(scene, bodyId);
+  const body = scene.tokens.get(bodyId);
   avatar?.object?.release?.();
+  if (avatar && body) await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks out.</b>` });
   if (avatar) await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
 }
 
@@ -735,6 +739,10 @@ async function handleSocket(msg) {
   if (!scene) return;
   if (msg.action === "jackIn") await jackIn(scene, msg.bodyId);
   if (msg.action === "jackOut") await jackOut(scene, msg.bodyId);
+  if (msg.action === "scanned") {
+    const list = scene.getFlag(ID, "scannedBy") ?? [];
+    if (!list.includes(msg.key)) await scene.setFlag(ID, "scannedBy", [...list, msg.key]);
+  }
   if (msg.action === "reveal") {
     const t = scene.tokens.get(msg.tokenId);
     if (!t?.getFlag(ID, "accessPoint")) return;
@@ -787,10 +795,17 @@ async function scanner() {
   const total = rank + die.total, ok = total > dv;
   const found = ok && hidden.length ? hidden[0] : null;
   const g = scene.grid.size, per = scene.grid.distance || 2;
-  const dist = found ? Math.round((Math.hypot(found.x - token.x, found.y - token.y) / g) * per) : 0;
-  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content:
-    `<div class="cpr-netarch-scan"><b>Scanner</b> · Interface ${rank} + d10 ${die.total}${die.note} = <b>${total}</b> vs DV ${dv}: ` +
-    (ok ? (found ? `<b>success.</b> An access point, about ${dist} m away.` : `<b>success.</b> Nothing you have not already found.`) : `<b>failure.</b>`) + `</div>` });
+  const dist = found ? Math.max(per, Math.ceil((Math.hypot(found.x - token.x, found.y - token.y) / g) * per / per) * per) : 0;
+  const name = actor?.name ?? token.name;
+  const result = ok ? (found ? `There is an access point within ${dist} metres.` : `Nothing here they have not already found.`) : `Nothing.`;
+  const line = `<b>${name} uses their Scanner.</b> Interface ${rank} + ${die.total}${die.note} = ${total}. ${result}`;
+  const scannedBy = scene.getFlag(ID, "scannedBy") ?? [];
+  const key = actor?.id ?? token.id;
+  if (!scannedBy.includes(key)) {
+    await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor }), content: `<div class="cpr-netarch-scan">${line}</div>` });
+    if (game.user.isGM) await scene.setFlag(ID, "scannedBy", [...scannedBy, key]);
+    else game.socket.emit(SOCKET, { action: "scanned", sceneId: scene.id, key });
+  } else ui.notifications.info(line.replace(/<[^>]+>/g, ""));
   if (!found) return;
   const msg = { action: "reveal", sceneId: scene.id, tokenId: found.id };
   if (game.user.isGM) return handleSocket(msg);
