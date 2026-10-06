@@ -739,6 +739,12 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   if (await repairPending(scene)) return ui.notifications.warn("The last build had been interrupted and was undone. Build again.");
   const { arch, placed, art, backdrop, ids, need, tierDv } = await prepare({ tier, text, arch: rolled });
 
+  let visionWasOff = false;
+  if (!scene.tokenVision) {
+    visionWasOff = true;
+    await scene.update({ tokenVision: true });
+  }
+
   // Grow the scene downward by the NET backdrop plus a margin row and move everything already on the map down
   // with it (document coordinates count from the padded canvas corner). Foundry v12 always stretches a scene's
   // background image over the whole scene, so the map image becomes a locked tile at its real size instead.
@@ -794,6 +800,7 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   if (canvas?.scene?.id === scene.id) await canvas.draw();
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
   ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden at the centre of your view; drag it where it belongs.`);
+  if (visionWasOff) ui.notifications.warn(`${scene.name} had token vision off, so every player could have seen the NET through the seam. It has been turned on.`);
 }
 
 /** Removes everything a build placed under the current scene, avatars included. */
@@ -1206,7 +1213,7 @@ function open() {
     .cpr-netarch label { display:block; font-weight:bold; margin-top:6px; }
     .cpr-netarch .row { display:flex; gap:8px; align-items:flex-end; }
     .cpr-netarch .row > div { flex:1; }
-    .cpr-netarch .floors { border:1px solid #999; border-radius:4px; padding:6px; min-height:120px; max-height:340px; overflow:auto; background:rgba(0,0,0,0.04); }
+    .cpr-netarch .floors { border:1px solid #999; border-radius:4px; padding:6px; min-height:160px; max-height:56vh; overflow:auto; background:rgba(0,0,0,0.04); }
     .cpr-netarch .floor { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:3px 2px; border-bottom:1px solid rgba(0,0,0,0.1); }
     .cpr-netarch .floor .num { display:inline-block; min-width:22px; font-weight:bold; text-align:right; margin-right:4px; }
     .cpr-netarch .item { display:inline-flex; align-items:center; gap:2px; background:rgba(0,0,0,0.06); border-radius:3px; padding:1px 3px; }
@@ -1245,12 +1252,11 @@ function open() {
     title: "NET Architecture",
     content,
     buttons: {
-      build: { icon: '<i class="fas fa-hammer"></i>', label: "Build scene", callback: guard(async (html) => build(read(html))) },
-      under: { icon: '<i class="fas fa-layer-group"></i>', label: "Build beside this scene", callback: guard(async (html) => buildUnder(read(html))) },
+      under: { icon: '<i class="fas fa-hammer"></i>', label: "Build beside this scene", callback: guard(async (html) => buildUnder(read(html))) },
       remove: { icon: '<i class="fas fa-trash"></i>', label: "Remove NET here", callback: guard(async () => removeUnder()) },
       cancel: { icon: '<i class="fas fa-times"></i>', label: "Cancel" },
     },
-    default: "build",
+    default: "under",
     render: (html) => {
       const box = html.find(".floors");
       const ta = html.find("[name=floors]");
@@ -1306,7 +1312,7 @@ function open() {
       box.on("click", "[data-add-branch]", () => { state.branches.push({ attach: Math.max(2, Math.min(state.main.length, 2)), floors: [{ items: [{ kind: "ice", name: "Wisp", count: 1 }] }] }); touch(); });
       box.on("click", "[data-del-branch]", (ev) => { state.branches.splice(Number(ev.currentTarget.dataset.branch), 1); touch(); });
     },
-  }, { width: 720, height: "auto", resizable: true }).render(true);
+  }, { width: 720, height: 800, resizable: true }).render(true);
 }
 
 /* Leftovers from earlier builds: pins from the map-pin experiment, and points marked found while still hidden. Cleared once, on the GM's load. */
