@@ -1181,7 +1181,7 @@ function floorRow(n, floor, path) {
   }).join("");
   return `<div class="floor"><span class="num">${n}</span>${items}
     <a data-add-item data-path="${path}" title="Add another piece to this floor"><i class="fas fa-plus"></i></a>
-    <span class="tools"><a data-up data-path="${path}" title="Move up"><i class="fas fa-arrow-up"></i></a><a data-down data-path="${path}" title="Move down"><i class="fas fa-arrow-down"></i></a><a data-del-floor data-path="${path}" title="Remove floor"><i class="fas fa-trash"></i></a></span></div>`;
+    <span class="tools"><a data-reroll data-path="${path}" title="Reroll just this floor"><i class="fas fa-dice"></i></a><a data-up data-path="${path}" title="Move up"><i class="fas fa-arrow-up"></i></a><a data-down data-path="${path}" title="Move down"><i class="fas fa-arrow-down"></i></a><a data-del-floor data-path="${path}" title="Remove floor"><i class="fas fa-trash"></i></a></span></div>`;
 }
 
 function renderRows(state) {
@@ -1195,6 +1195,31 @@ function renderRows(state) {
       <a data-del-branch data-branch="${bi}" title="Remove this branch"><i class="fas fa-trash"></i></a></div>${rows}</div>`;
   }).join("");
   return `${main}<div class="bhead"><a data-add-floor data-branch="-1"><i class="fas fa-plus"></i> floor</a> <a data-add-branch><i class="fas fa-code-branch"></i> branch</a></div>${branches}`;
+}
+
+/** The table a floor rolls on: the Lobby for the first two of the main path, the tier's Body table otherwise. */
+function tableForPath(path, tier) {
+  const [g, i] = path.split(".");
+  return g === "m" && Number(i) < 2 ? LOBBY : BODY[tier];
+}
+
+/**
+ * Every Program and Password standing anywhere else in the architecture, so rerolling one
+ * floor still obeys the book's rule that an already-rolled Program or Password is rerolled.
+ * The floor being replaced is excluded, or it would block its own result.
+ */
+function seenExcept(state, path) {
+  const seen = new Set();
+  const add = (floors, prefix) => floors.forEach((f, i) => {
+    if (`${prefix}.${i}` === path) return;
+    for (const it of f.items) {
+      const k = it.kind === "node" ? (it.node === "password" ? "Password" : null) : it.name;
+      if (k) seen.add(k);
+    }
+  });
+  add(state.main, "m");
+  state.branches.forEach((b, bi) => add(b.floors, `b${bi}`));
+  return seen;
 }
 
 /** Resolves a data-path like "m.2" or "b0.1" to the floor list and index it names. */
@@ -1301,6 +1326,17 @@ function open() {
         const el = ev.currentTarget; const { list, i } = floorAt(state, el.dataset.path);
         list[i].items.splice(Number(el.dataset.item), 1); if (!list[i].items.length) list.splice(i, 1); touch();
       });
+      box.on("click", "[data-reroll]", (ev) => {
+        const path = ev.currentTarget.dataset.path;
+        const tier = html.find("[name=tier]").val();
+        const table = tableForPath(path, tier);
+        if (!table) return ui.notifications.warn(`Unknown difficulty "${tier}".`);
+        const { list, i } = floorAt(state, path);
+        const f = rollFloor(table, Math.random, seenExcept(state, path), tier);
+        const note = (table === LOBBY ? "1d6=" : "3d6=") + f.rolls[f.rolls.length - 1] + (f.rolls.length > 1 ? `, rerolled ${f.rolls.slice(0, -1).join(", ")}` : "");
+        list[i] = { items: f.items, note };
+        draw();
+      });
       box.on("click", "[data-del-floor]", (ev) => { const { list, i } = floorAt(state, ev.currentTarget.dataset.path); list.splice(i, 1); touch(); });
       box.on("click", "[data-up]", (ev) => { const { list, i } = floorAt(state, ev.currentTarget.dataset.path); if (i > 0) { [list[i - 1], list[i]] = [list[i], list[i - 1]]; touch(); } });
       box.on("click", "[data-down]", (ev) => { const { list, i } = floorAt(state, ev.currentTarget.dataset.path); if (i < list.length - 1) { [list[i + 1], list[i]] = [list[i], list[i + 1]]; touch(); } });
@@ -1352,4 +1388,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };

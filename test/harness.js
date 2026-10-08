@@ -305,5 +305,52 @@ check("T11 summary html lists every floor and each ICE's stats once", () => {
   });
 }
 
+check("T16 one floor rerolls on its own table and honours what is already standing", () => {
+  // Same rendering the whole-architecture test uses, so "on the table" means the same thing here.
+  const lineOf = (f) => f.items.map((it) => it.kind === "node"
+    ? `${{ password: "Password", file: "File", control: "Control Node" }[it.node]} DV${it.dv}`
+    : it.name + (it.count > 1 ? ` x${it.count}` : "")).join(", ");
+  const keysOf = (f) => f.items.map((it) => (it.kind === "node" ? (it.node === "password" ? "Password" : null) : it.name)).filter(Boolean);
+
+  // The table is chosen by position: the first two of the main path are Lobby, the rest Body.
+  assert(M.tableForPath("m.0", "Standard") === M.LOBBY, "m.0 should be the Lobby table");
+  assert(M.tableForPath("m.1", "Standard") === M.LOBBY, "m.1 should be the Lobby table");
+  assert(M.tableForPath("m.2", "Standard") === M.BODY.Standard, "m.2 should be the Body table");
+  assert(M.tableForPath("b0.0", "Standard") === M.BODY.Standard, "branch floors should be the Body table");
+  assert(M.tableForPath("b3.9", "Standard") === M.BODY.Standard, "deep branch floors should be the Body table");
+  assert(M.tableForPath("m.5", "Nonsense") === undefined, "an unknown difficulty must resolve no table");
+
+  const state = M.rollArchitecture("Standard", mulberry32(7));
+  const all = (s) => [...s.main, ...s.branches.flatMap((b) => b.floors)];
+
+  // seenExcept holds everything standing elsewhere and nothing from the floor being replaced,
+  // or that floor would block its own result and reroll thirty times for nothing.
+  const seen = M.seenExcept(state, "m.2");
+  const elsewhere = new Set(all(state).filter((f) => f !== state.main[2]).flatMap(keysOf));
+  assert(seen.size === elsewhere.size, `seenExcept size ${seen.size} vs ${elsewhere.size}`);
+  for (const k of elsewhere) assert(seen.has(k), `seenExcept missing ${k}`);
+  for (const k of keysOf(state.main[2])) {
+    if (!elsewhere.has(k)) assert(!seen.has(k), `seenExcept should not hold ${k} from the replaced floor`);
+  }
+
+  // Reroll the same body floor repeatedly: always on the Body table, never duplicating
+  // a Program or Password that stands elsewhere unless the thirty-attempt cap was hit.
+  const body = new Set(M.BODY.Standard);
+  const rng = mulberry32(99);
+  for (let n = 0; n < 500; n++) {
+    const s2 = M.seenExcept(state, "m.2");
+    const before = new Set(s2);   // rollFloor adds its own result to the set it is handed
+    const f = M.rollFloor(M.BODY.Standard, rng, s2, "Standard");
+    assert(body.has(lineOf(f)), `reroll ${n} landed off the Body table: "${lineOf(f)}"`);
+    if (f.rolls.length < 30) for (const k of keysOf(f)) assert(!before.has(k), `reroll ${n} duplicated ${k}`);
+    state.main[2] = { items: f.items };   // keep it in place so the next pass sees the new one
+  }
+
+  // A Lobby floor rerolls onto the Lobby table.
+  const lobby = new Set(M.LOBBY);
+  const lf = M.rollFloor(M.LOBBY, mulberry32(3), new Set(), "Standard");
+  assert(lobby.has(lineOf(lf)), `lobby reroll landed off the Lobby table: "${lineOf(lf)}"`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
