@@ -1388,4 +1388,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };

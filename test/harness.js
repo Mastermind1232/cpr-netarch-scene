@@ -352,5 +352,51 @@ check("T16 one floor rerolls on its own table and honours what is already standi
   assert(lobby.has(lineOf(lf)), `lobby reroll landed off the Lobby table: "${lineOf(lf)}"`);
 });
 
+check("T17 branch paths resolve the same floor for both the row and the seen set", () => {
+  // floorRow, floorAt and seenExcept each build or read a data-path independently. If those
+  // ever disagree, a reroll silently replaces the wrong floor, so pin them against each other.
+  let state = null;
+  for (let seed = 1; seed < 400 && !state; seed++) {
+    const a = M.rollArchitecture("Standard", mulberry32(seed));
+    if (a.branches.length && a.branches[0].floors.length > 1) state = a;
+  }
+  assert(state, "no seeded architecture with a multi-floor branch");
+
+  const paths = [
+    ...state.main.map((_, i) => `m.${i}`),
+    ...state.branches.flatMap((b, bi) => b.floors.map((_, i) => `b${bi}.${i}`)),
+  ];
+  const keysOf = (f) => f.items.map((it) => (it.kind === "node" ? (it.node === "password" ? "Password" : null) : it.name)).filter(Boolean);
+  const all = [...state.main, ...state.branches.flatMap((b) => b.floors)];
+  assert(paths.length === all.length, `path count ${paths.length} vs floor count ${all.length}`);
+
+  for (const path of paths) {
+    const { list, i } = M.floorAt(state, path);
+    const floor = list[i];
+    assert(all.includes(floor), `${path} resolved to a floor outside the architecture`);
+
+    // seenExcept(path) must omit exactly the keys that only this floor holds.
+    const seen = M.seenExcept(state, path);
+    const others = new Set(all.filter((f) => f !== floor).flatMap(keysOf));
+    assert(seen.size === others.size, `${path}: seenExcept ${seen.size} vs ${others.size}`);
+    for (const k of others) assert(seen.has(k), `${path}: seenExcept missing ${k}`);
+    for (const k of keysOf(floor)) if (!others.has(k)) assert(!seen.has(k), `${path}: seenExcept held ${k} from its own floor`);
+
+    // Branch floors are never Lobby floors, however deep the branch goes.
+    if (path.startsWith("b")) assert(M.tableForPath(path, "Standard") === M.BODY.Standard, `${path} resolved to the Lobby table`);
+  }
+
+  // Rerolling a branch floor replaces that floor and nothing else.
+  const before = all.map((f) => f.items);
+  const target = M.floorAt(state, "b0.0");
+  const f = M.rollFloor(M.BODY.Standard, mulberry32(42), M.seenExcept(state, "b0.0"), "Standard");
+  target.list[target.i] = { items: f.items, note: "x" };
+  const after = [...state.main, ...state.branches.flatMap((b) => b.floors)].map((x) => x.items);
+  let changed = 0;
+  for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) changed++;
+  assert(changed === 1, `a branch reroll changed ${changed} floors`);
+  assert(state.branches[0].floors[0].items === f.items, "the reroll did not land on b0.0");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
