@@ -1235,10 +1235,17 @@ function open() {
   const here = canvas?.scene?.name ?? "the current scene";
   const content = `
   <style>
+    /* Let the floor list own the window. Foundry stretches the button footer to fill
+       whatever the content does not claim, so the content has to claim all of it. */
+    .cpr-netarch-dialog .window-content { display:flex; flex-direction:column; min-height:0; }
+    .cpr-netarch-dialog .dialog-content { flex:1 1 auto; display:flex; flex-direction:column; min-height:0; }
+    .cpr-netarch-dialog .dialog-buttons { flex:0 0 auto; align-items:stretch; }
+    .cpr-netarch-dialog .dialog-buttons button { height:34px; line-height:32px; padding:0 10px; white-space:nowrap; }
+    .cpr-netarch { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
     .cpr-netarch label { display:block; font-weight:bold; margin-top:6px; }
-    .cpr-netarch .row { display:flex; gap:8px; align-items:flex-end; }
+    .cpr-netarch .row { display:flex; gap:8px; align-items:flex-end; flex:0 0 auto; }
     .cpr-netarch .row > div { flex:1; }
-    .cpr-netarch .floors { border:1px solid #999; border-radius:4px; padding:6px; min-height:160px; max-height:56vh; overflow:auto; background:rgba(0,0,0,0.04); }
+    .cpr-netarch .floors { flex:1 1 auto; border:1px solid #999; border-radius:4px; padding:6px; min-height:120px; overflow:auto; background:rgba(0,0,0,0.04); }
     .cpr-netarch .floor { display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:3px 2px; border-bottom:1px solid rgba(0,0,0,0.1); }
     .cpr-netarch .floor .num { display:inline-block; min-width:22px; font-weight:bold; text-align:right; margin-right:4px; }
     .cpr-netarch .item { display:inline-flex; align-items:center; gap:2px; background:rgba(0,0,0,0.06); border-radius:3px; padding:1px 3px; }
@@ -1248,7 +1255,7 @@ function open() {
     .cpr-netarch .tools { margin-left:auto; white-space:nowrap; }
     .cpr-netarch .branch { margin-top:6px; border-left:3px solid #888; padding-left:6px; }
     .cpr-netarch .bhead { font-weight:bold; padding:4px 2px; }
-    .cpr-netarch textarea { width:100%; min-height:120px; font-family:monospace; font-size:12px; white-space:pre; }
+    .cpr-netarch textarea { width:100%; flex:1 1 auto; min-height:120px; font-family:monospace; font-size:12px; white-space:pre; }
     .cpr-netarch .hint { font-size:11px; opacity:0.8; margin:4px 0 0; }
   </style>
   <form class="cpr-netarch" autocomplete="off">
@@ -1348,7 +1355,7 @@ function open() {
       box.on("click", "[data-add-branch]", () => { state.branches.push({ attach: Math.max(2, Math.min(state.main.length, 2)), floors: [{ items: [{ kind: "ice", name: "Wisp", count: 1 }] }] }); touch(); });
       box.on("click", "[data-del-branch]", (ev) => { state.branches.splice(Number(ev.currentTarget.dataset.branch), 1); touch(); });
     },
-  }, { width: 720, height: 800, resizable: true }).render(true);
+  }, { classes: ["dialog", "cpr-netarch-dialog"], width: 720, height: 800, resizable: true }).render(true);
 }
 
 /* Leftovers from earlier builds: pins from the map-pin experiment, and points marked found while still hidden. Cleared once, on the GM's load. */
