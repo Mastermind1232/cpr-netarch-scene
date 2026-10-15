@@ -398,5 +398,21 @@ check("T17 branch paths resolve the same floor for both the row and the seen set
   assert(state.branches[0].floors[0].items === f.items, "the reroll did not land on b0.0");
 });
 
+
+check("T18 the brief reads the right figures for ICE, Demons and nodes", () => {
+  const brief = globalThis.__netarchTest?.itemBrief;
+  assert(typeof brief === "function", "itemBrief was not exposed to the harness");
+  const wisp = brief({ kind: "ice", name: "Wisp", count: 1 });
+  assert(wisp.includes("Anti-Personnel"), "wisp class");
+  assert(wisp.includes("PER 4 SPD 4 ATK 4 DEF 2 REZ 15"), "wisp stat line");
+  assert(wisp.includes("NET Actions next turn are reduced by 1"), "wisp effect");
+  assert(brief({ kind: "ice", name: "Killer" }).includes("Anti-Program"), "killer class");
+  assert(brief({ kind: "ice", name: "Killer" }).includes("REZ 20"), "killer rez");
+  assert(brief({ kind: "demon", name: "Balron" }).includes("REZ 30"), "balron rez");
+  assert(brief({ kind: "demon", name: "Balron" }).includes("NET Actions 4"), "balron actions");
+  eq(brief({ kind: "node", node: "File" }), "", "a node has no brief");
+  eq(brief({ kind: "ice", name: "Nonsense" }), "", "an unknown name is silent");
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

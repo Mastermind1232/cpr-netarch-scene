@@ -1166,6 +1166,27 @@ function itemFromKey(key, old = {}) {
 }
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+/** What a piece of Black ICE or a Demon does, for the row underneath its dropdown.
+    Same figures the post-build summary whispers, moved in front of the Build button so
+    a rolled architecture can be read before it is committed to. */
+function itemBrief(it) {
+  if (it.kind === "ice") {
+    const d = ICE[it.name];
+    if (!d) return "";
+    const cls = d.cls === "antiprogram" ? "Anti-Program" : "Anti-Personnel";
+    return `<span class="st">${cls} &middot; PER ${d.per} SPD ${d.spd} ATK ${d.atk} DEF ${d.def} REZ ${d.rez}</span>${esc(d.effect)}`;
+  }
+  if (it.kind === "demon") {
+    const d = DEMONS[it.name];
+    if (!d) return "";
+    return `<span class="st">Demon &middot; REZ ${d.rez} Interface ${d.interface} NET Actions ${d.actions} Combat ${d.combatNumber}</span>`
+      + "Runs Control Nodes and Zaps. Cannot be slid away from, ignores Passwords, always knows a runner is there.";
+  }
+  return "";
+}
+
+if (typeof globalThis !== "undefined") (globalThis.__netarchTest ??= {}).itemBrief = itemBrief;
+
 /** One floor row: its items as dropdowns, and the buttons that shape it. */
 function floorRow(n, floor, path) {
   const items = floor.items.map((it, ii) => {
@@ -1179,9 +1200,13 @@ function floorRow(n, floor, path) {
       : "";
     return `<span class="item"><select data-kind data-path="${path}" data-item="${ii}">${opts}</select>${dv}${count}<a data-del-item data-path="${path}" data-item="${ii}" title="Remove this piece"><i class="fas fa-times"></i></a></span>`;
   }).join("");
+  const briefs = floor.items.map((it) => {
+    const b = itemBrief(it);
+    return b ? `<div class="brief"><b>${esc(it.name)}${it.count > 1 ? ` &times;${it.count}` : ""}</b> ${b}</div>` : "";
+  }).join("");
   return `<div class="floor"><span class="num">${n}</span>${items}
     <a data-add-item data-path="${path}" title="Add another piece to this floor"><i class="fas fa-plus"></i></a>
-    <span class="tools"><a data-reroll data-path="${path}" title="Reroll just this floor"><i class="fas fa-dice"></i></a><a data-up data-path="${path}" title="Move up"><i class="fas fa-arrow-up"></i></a><a data-down data-path="${path}" title="Move down"><i class="fas fa-arrow-down"></i></a><a data-del-floor data-path="${path}" title="Remove floor"><i class="fas fa-trash"></i></a></span></div>`;
+    <span class="tools"><a data-reroll data-path="${path}" title="Reroll just this floor"><i class="fas fa-dice"></i></a><a data-up data-path="${path}" title="Move up"><i class="fas fa-arrow-up"></i></a><a data-down data-path="${path}" title="Move down"><i class="fas fa-arrow-down"></i></a><a data-del-floor data-path="${path}" title="Remove floor"><i class="fas fa-trash"></i></a></span>${briefs}</div>`;
 }
 
 function renderRows(state) {
@@ -1257,6 +1282,11 @@ function open() {
     .cpr-netarch .bhead { font-weight:bold; padding:4px 2px; }
     .cpr-netarch textarea { width:100%; flex:1 1 auto; min-height:120px; font-family:monospace; font-size:12px; white-space:pre; }
     .cpr-netarch .hint { font-size:11px; opacity:0.8; margin:4px 0 0; }
+    /* What each piece of ICE does, under the row that picks it. Full width so it wraps
+       below the dropdowns rather than beside them. */
+    .cpr-netarch .brief { flex:0 0 100%; margin:1px 0 2px 26px; font-size:11px; line-height:1.35; opacity:0.78; }
+    .cpr-netarch .brief b { opacity:0.95; }
+    .cpr-netarch .brief .st { display:inline-block; font-family:monospace; font-size:10.5px; letter-spacing:0.2px; margin-right:6px; opacity:0.85; }
   </style>
   <form class="cpr-netarch" autocomplete="off">
     <div class="row">
