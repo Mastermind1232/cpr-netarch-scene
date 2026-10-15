@@ -479,7 +479,19 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
   });
   { const R = roomAt(deepest.cell); tiles.push(tileDoc(sp, { src: `${art}/Root.webm`, x: R.x, y: R.y, w: ROOM, h: ROOM, sort: 0 })); }
 
-  const record = { floors: floors.map((f) => ({ n: f.n, path: f.path, cell: f.cell, text: floorText(f) })), bottom: deepest.n, notes: placed.notes };
+  // The record is the contract between the builder and everything that reads the NET
+  // afterwards. It carries the resolved contents of each floor, not just its label,
+  // and the space the rooms were laid out in, which differs between a NET of its own
+  // and one laid under a map.
+  const record = {
+    floors: floors.map((f) => ({
+      n: f.n, path: f.path, cell: f.cell, text: floorText(f),
+      items: f.items.map((it) => (it.kind === "node"
+        ? { kind: "node", node: it.node, dv: dvOf(it) ?? null }
+        : { kind: it.kind, name: it.name, count: it.count ?? 1 })),
+    })),
+    bottom: deepest.n, notes: placed.notes, sp,
+  };
   const docs = {
     walls: walls.map((w) => tagged("wall", w, embed)),
     tokens: tokens.map((t) => tagged("token", t, embed)),
@@ -499,6 +511,46 @@ function buildSceneData(arch, placed, { name, backdrop, art, ids = {}, tierDv = 
   /** The corridor square where a jacked-in runner appears, in canvas pixels. */
   const entry = { x: X(sp, LAT.x0 - 2), y: Y(sp, LAT.y0 + ROOM * LAT.entryRow) };
   return { sceneData, docs, floors, bottom: deepest.n, record, entry };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Reading a built NET                                                */
+/* ------------------------------------------------------------------ */
+
+/** The build record for a scene, from either build path, or null if it holds no NET.
+    A NET of its own stores the record as the module's scene flags and was always laid
+    out in NET_SPACE; one laid under a map stores it under the "net" flag along with
+    the space it used, because the map above it decides the offset. */
+function netRecord(scene) {
+  const under = scene?.getFlag?.(ID, "net");
+  if (under?.floors) return { ...under, sp: under.sp ?? NET_SPACE };
+  const own = scene?.flags?.[ID];
+  if (own?.floors) return { ...own, sp: own.sp ?? NET_SPACE };
+  return null;
+}
+
+/** The floor a point in canvas pixels sits in, or null for the corridor, the map
+    above an embedded NET, and everywhere else that is not a room. */
+function floorOfPoint(scene, x, y) {
+  const rec = netRecord(scene);
+  if (!rec) return null;
+  const { g, padX, padY } = rec.sp;
+  const gx = x / g - padX;
+  const gy = y / g - padY;
+  for (const f of rec.floors) {
+    const R = roomAt(f.cell);
+    if (gx >= R.x && gx < R.x + ROOM && gy >= R.y && gy < R.y + ROOM) return f;
+  }
+  return null;
+}
+
+/** The floor a token is standing in, measured from its centre so a token larger than
+    one square is judged by where it actually is rather than by its corner. */
+function floorOfToken(token) {
+  if (!token) return null;
+  const scene = token.parent ?? token.scene;
+  const g = scene?.grid?.size ?? G;
+  return floorOfPoint(scene, token.x + ((token.width ?? 1) * g) / 2, token.y + ((token.height ?? 1) * g) / 2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -877,9 +929,25 @@ async function jackOut(scene, bodyId) {
   if (avatar && body) await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks out.</b>` });
   if (!avatar) return;
   await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
-  if (!scene.tokens.some((t) => t.getFlag(ID, "avatarOf")) && scene.getFlag(ID, "fogWas") !== undefined) {
+  if (scene.tokens.some((t) => t.getFlag(ID, "avatarOf"))) return;
+  // "Jacking out safely resets the Architecture's defenses": with the last runner gone,
+  // everything that woke goes back to lying in wait and leaves the initiative queue.
+  await resetDefenses(scene);
+  if (scene.getFlag(ID, "fogWas") !== undefined) {
     await scene.update({ "fog.exploration": true });
     await scene.unsetFlag(ID, "fogWas");
+  }
+}
+
+/** Put every woken piece of ICE back to sleep and out of the order. */
+async function resetDefenses(scene) {
+  const woken = scene.tokens.filter((t) => t.getFlag(ID, SLEEPING) === false);
+  if (!woken.length) return;
+  await scene.updateEmbeddedDocuments("Token",
+    woken.map((t) => ({ _id: t.id, [`flags.${ID}.${SLEEPING}`]: true })), { cprNetarch: true });
+  for (const combat of game.combats ?? []) {
+    const ids = combat.combatants.filter((c) => woken.some((t) => t.id === c.tokenId)).map((c) => c.id);
+    if (ids.length) await combat.deleteEmbeddedDocuments("Combatant", ids);
   }
 }
 
@@ -968,6 +1036,369 @@ Hooks.on("updateToken", (doc, changes, options, userId) => {
   else if (changes.hidden === true) concealAccessPoint(doc.parent, doc).catch(reportErr);
 });
 
+/* ------------------------------------------------------------------ */
+/*  Walking into a room                                                */
+/* ------------------------------------------------------------------ */
+
+/* The book: "When you encounter enemy Black ICE lying in wait in an Architecture, you
+   roll your Interface + any SPEED bonus you have active + 1d10 vs the Black ICE's SPEED
+   + 1d10. If it beats your Check, you suffer its effect immediately. It is then placed
+   into the Initiative Queue at the top, one number above the entity with the previously
+   highest Initiative."
+
+   So it is not a free hit: the ICE only lands its effect if it wins. Either way it wakes
+   and joins the fight above everyone. A Demon has no SPD and is not contested; it simply
+   wakes. ICE already awake is not rolled against again. */
+
+const SLEEPING = "asleep";
+
+/** The ICE and Demon tokens lying in wait on a floor, that have not woken yet. */
+function sleepersOn(scene, floor) {
+  if (!floor) return [];
+  return scene.tokens.filter((t) => {
+    const type = t.actor?.type;
+    if (type !== "blackIce" && type !== "demon") return false;
+    if (t.getFlag(ID, SLEEPING) === false) return false;
+    return floorOfToken(t)?.n === floor.n;
+  });
+}
+
+/** The Netrunner role item on an actor, whatever the item happens to be called. */
+function netrunnerRole(actor) {
+  return actor?.items?.find((i) => i.type === "role"
+    && (String(i.system?.mainRoleAbility ?? "").toLowerCase() === "interface" || /netrunner/i.test(i.name))) ?? null;
+}
+
+/* Active Effects carry Interface-ability bonuses under keys like "bonuses.speed". CPR reads
+   them through its own CPRMod class, which is a module import rather than anything global, so
+   the same few rules are repeated here: skip disabled and suppressed effects, and skip a
+   situational change unless it is on by default. */
+function netBonus(actor, key) {
+  let sum = 0;
+  for (const effect of actor?.allApplicableEffects?.() ?? []) {
+    if (effect.disabled || effect.system?.isSuppressed) continue;
+    const situational = effect.flags?.[game.system.id]?.changes?.situational ?? [];
+    effect.changes.forEach((change, i) => {
+      if (change.key !== `bonuses.${key}`) return;
+      const s = situational[i];
+      if (s?.isSituational && !s.onByDefault) return;
+      sum += Number.parseInt(change.value, 10) || 0;
+    });
+  }
+  return sum;
+}
+
+/* ------------------------------------------------------------------ */
+/*  NET Actions                                                        */
+/* ------------------------------------------------------------------ */
+
+/* "On their Turn a Netrunner takes either one Meat Action or as many NET Actions as their
+   Interface rank allows." Rank 1 to 3 gives 2, 4 to 6 gives 3, 7 to 9 gives 4, 10 gives 5.
+   The system has no counter of its own, so this is one. */
+/** The GMs, plus whoever owns this actor. Everything the NET says is private to those two. */
+function whisperFor(actor) {
+  const gms = game.users.filter((u) => u.isGM).map((u) => u.id);
+  const owners = game.users.filter((u) => !u.isGM && actor?.testUserPermission?.(u, "OWNER")).map((u) => u.id);
+  return [...new Set([...gms, ...owners])];
+}
+
+const NET_ACTIONS = [0, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5];
+const POOL = "netActions";
+
+/** The eight Interface Abilities that cost a NET Action. Scanner is a Meat Action; Defense and Speed are not actions. */
+const NET_ABILITIES = new Set(["backdoor", "cloak", "control", "eyedee", "pathfinder", "slide", "virus", "zap"]);
+
+/** The rank printed on the role item, which is what the table is read with. Bonuses raise checks, not the table. */
+function interfaceRank(actor) {
+  return Number.parseInt(netrunnerRole(actor)?.system?.rank, 10) || 0;
+}
+
+/** How many NET Actions a Turn gives this runner before anything takes one away. */
+function baseNetActions(actor) {
+  const rank = interfaceRank(actor);
+  if (rank < 1) return 0;
+  return NET_ACTIONS[Math.min(rank, 10)];
+}
+
+/* The pool is kept on the actor rather than the avatar, because the avatar is deleted on
+   every jack out and a penalty may outlive the run. `penalty` is owed to the turn that has
+   not started yet; `max` is what the turn that is running was given. */
+function netPool(actor) {
+  const kept = actor?.getFlag(ID, POOL) ?? {};
+  const max = Number.isInteger(kept.max) ? kept.max : baseNetActions(actor);
+  return { max, left: Number.isInteger(kept.left) ? kept.left : max, penalty: Number(kept.penalty) || 0 };
+}
+
+const setPool = (actor, pool) => actor.setFlag(ID, POOL, pool);
+
+/** A new Turn: the pool refills, less anything owed, and the debt is paid off. */
+async function refillNetActions(actor) {
+  const { penalty } = netPool(actor);
+  const base = baseNetActions(actor);
+  if (!base) return null;
+  // "reduced by 1, minimum 2" is a floor on the pool, not on the size of the reduction.
+  const max = penalty ? Math.max(2, base - penalty) : base;
+  await setPool(actor, { max, left: max, penalty: 0 });
+  return { max, penalty };
+}
+
+/** Owe the next Turn a smaller pool. */
+async function chargeNetActions(actor, n = 1) {
+  const pool = netPool(actor);
+  await setPool(actor, { ...pool, penalty: pool.penalty + n });
+}
+
+/** Spend one. Returns what is left, or null if there was nothing to spend. */
+async function spendNetAction(actor, n = 1) {
+  const pool = netPool(actor);
+  if (!pool.max) return null;
+  const left = Math.max(0, pool.left - n);
+  await setPool(actor, { ...pool, left });
+  return { ...pool, left, short: pool.left < n };
+}
+
+/* Foundry fires updateCombat for every client, so the refill is left to the GM. A runner whose
+   Turn comes round gets their pool back; everyone else is left alone. */
+Hooks.on("updateCombat", (combat, changes) => {
+  if (!game.user.isGM) return;
+  if (!("turn" in changes) && !("round" in changes)) return;
+  const actor = combat.combatant?.actor;
+  if (!actor || !baseNetActions(actor)) return;
+  refillNetActions(actor).then((r) => {
+    if (r?.penalty) ChatMessage.create({
+      speaker: { alias: "NET Architecture" },
+      whisper: whisperFor(actor),
+      content: `<b>${esc(actor.name)}</b> starts this Turn with ${r.max} NET Action${r.max === 1 ? "" : "s"}, ${r.penalty} fewer than usual.`,
+    });
+  }).catch(reportErr);
+});
+
+/* CPR's Fight tab lists the Interface Abilities as plain rollable links and has no notion of a
+   pool, so the count is drawn above them and a click is counted on the way past. The listener is
+   on the capture phase so it runs before CPR's own, and it never stops the roll: running out of
+   NET Actions is the GM's call to make, not the sheet's. */
+Hooks.on("renderActorSheet", (app, html) => {
+  const actor = app.actor;
+  const root = html?.[0] ?? html;
+  const list = root?.querySelector?.(".net-actions-content");
+  if (!list || !actor || !baseNetActions(actor)) return;
+
+  const { max, left, penalty } = netPool(actor);
+  const pips = `${"\u25cf".repeat(left)}${"\u25cb".repeat(Math.max(0, max - left))}`;
+  const row = document.createElement("li");
+  row.className = "items-header text-padding-left-smallest flexrow cpr-netarch-pool";
+  row.innerHTML = `<span class="item-name section-name text-nowrap">NET Actions `
+    + `<a class="cpr-netarch-give" data-tooltip="Give one back"><b>${left}</b>/${max} <span style="letter-spacing:1px">${pips}</span></a></span>`
+    + (penalty ? `<span class="item-detail text-nowrap" style="opacity:.75">next Turn &minus;${penalty}</span>` : "")
+    + `<a class="cpr-netarch-refill" data-tooltip="Refill the pool">${"\u21ba"}</a>`;
+  list.prepend(row);
+  // The count is taken on the click, so a roll the player then cancels still costs one. Both
+  // corrections are a click of their own rather than anything to be typed.
+  const adjust = (sel, fn) => row.querySelector(sel).addEventListener("click", (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    fn().catch(reportErr);
+  });
+  adjust(".cpr-netarch-give", () => setPool(actor, { ...netPool(actor), left: Math.min(max, left + 1) }));
+  adjust(".cpr-netarch-refill", () => {
+    const base = baseNetActions(actor);
+    return setPool(actor, { max: base, left: base, penalty: 0 });
+  });
+
+  list.addEventListener("click", (ev) => {
+    const link = ev.target.closest?.('a[data-roll-type="interfaceAbility"]');
+    if (!link || !NET_ABILITIES.has(link.dataset.interfaceAbility)) return;
+    spendNetAction(actor).then((r) => {
+      if (r?.short) ui.notifications.warn(`${actor.name} had no NET Actions left this Turn.`);
+    }).catch(reportErr);
+  }, true);
+});
+
+/** The runner's Interface rank as the sheet shows it. */
+function interfaceOf(actor) {
+  const rank = Number.parseInt(netrunnerRole(actor)?.system?.rank, 10) || 0;
+  return rank + netBonus(actor, "interface");
+}
+
+/** Which piece of ICE a token is. The actor's name is the reliable one, because renaming a
+ *  token leaves it alone, but a token renamed around the name still has to be recognised. */
+function iceName(token) {
+  if (ICE[token.actor?.name]) return token.actor.name;
+  if (ICE[token.name]) return token.name;
+  const words = `${token.actor?.name ?? ""} ${token.name ?? ""}`.toLowerCase();
+  return Object.keys(ICE).find((n) => new RegExp(`\\b${n.toLowerCase()}\\b`).test(words)) ?? null;
+}
+
+/** The ICE's own numbers. */
+const iceData = (token) => ICE[iceName(token)] ?? null;
+
+/* What each piece of ICE does when it lands, split into the parts a module can own and the
+   parts it cannot. Brain damage is HP, and a NET Action penalty is the pool above, so both are
+   applied. Everything else (burning, a derezzed Defender, a destroyed Program, a stat lowered
+   for an hour) is rolled so the number is on the table, and left for the GM to apply. */
+const ICE_EFFECT = {
+  Wisp:       { brain: "1d6", netActions: 1 },
+  Raven:      { brain: "1d6", first: "Derezzes one rezzed Defender at random." },
+  Hellhound:  { brain: "2d6", then: "Deck and clothing catch fire unless insulated: 2 HP at the end of each Turn until a Meat Action puts it out. Does not stack." },
+  Kraken:     { brain: "3d6", then: "Until the end of the runner's next Turn they cannot go deeper or jack out safely." },
+  Giant:      { brain: "3d6", then: "Forcibly and unsafely jacked out, suffering the effect of every rezzed enemy Black ICE met on this run except the Giant." },
+  Liche:      { stats: { INT: "1d6", REF: "1d6", DEX: "1d6" }, then: "Each lowered for an hour, minimum 1." },
+  Scorpion:   { stats: { MOVE: "1d6" }, then: "Lowered for an hour, minimum 1." },
+  Skunk:      { then: "Until derezzed, the runner hit makes all Slide checks at -2. One runner per Skunk; several Skunks stack." },
+  Asp:        { destroysProgram: true },
+  Dragon:     { program: "6d6" },
+  Killer:     { program: "4d6" },
+  Sabertooth: { program: "6d6" },
+};
+
+const sum = async (formula) => (await new Roll(formula).evaluate()).total;
+
+/** A Program on the runner's equipped deck, picked at random, for the ICE that destroys one. */
+function randomProgram(actor) {
+  const deck = actor?.getEquippedCyberdeck?.();
+  const programs = deck?.getInstalledItems?.("program")
+    ?? actor?.items?.filter?.((i) => i.type === "program")
+    ?? [];
+  if (!programs.length) return null;
+  return programs[Math.floor(Math.random() * programs.length)];
+}
+
+/** Resolve one landed effect: roll its dice, apply what is ours, and describe the rest. */
+async function landEffect(actor, iceToken) {
+  const spec = ICE_EFFECT[iceName(iceToken)];
+  if (!spec) return esc(iceData(iceToken)?.effect ?? "");
+  const said = [], done = [];
+  if (spec.first) said.push(esc(spec.first));
+  if (spec.brain) {
+    const hp = await sum(spec.brain);
+    const now = Number(actor.system?.derivedStats?.hp?.value);
+    said.push(`<b>${hp}</b> to the brain (${spec.brain}). Armor does not reduce it and it cannot cause a Critical Injury.`);
+    if (Number.isFinite(now)) {
+      await actor.update({ "system.derivedStats.hp.value": now - hp });
+      done.push(`HP ${now} to ${now - hp}`);
+    }
+  }
+  if (spec.netActions) {
+    await chargeNetActions(actor, spec.netActions);
+    const base = baseNetActions(actor);
+    said.push(`NET Actions next Turn reduced by ${spec.netActions}, minimum 2.`);
+    done.push(`next Turn's pool ${Math.max(2, base - netPool(actor).penalty)} instead of ${base}`);
+  }
+  if (spec.stats) {
+    const rolled = [];
+    for (const [stat, formula] of Object.entries(spec.stats)) rolled.push(`${stat} &minus;${await sum(formula)}`);
+    said.push(`${rolled.join(", ")} (${Object.values(spec.stats)[0]} each).`);
+  }
+  if (spec.program) said.push(`<b>${await sum(spec.program)}</b> (${spec.program}) to one Program's REZ. If that would derez it, it is destroyed instead.`);
+  if (spec.destroysProgram) {
+    const prog = randomProgram(actor);
+    said.push(prog ? `Destroys <b>${esc(prog.name)}</b>, picked at random from the deck.` : "Destroys one Program on the deck at random, but the runner has none.");
+  }
+  if (spec.then) said.push(esc(spec.then));
+  const tail = done.length ? `<br><span style="opacity:.7;font-size:.9em">Applied: ${done.join("; ")}. The rest is yours.</span>` : "";
+  return said.join(" ") + tail;
+}
+
+/** One opposed Speed contest, runner against a sleeping piece of ICE. */
+async function speedContest(actor, token) {
+  const iface = interfaceOf(actor);
+  const speed = netBonus(actor, "speed");
+  const runner = await checkDie();
+  const theirs = await checkDie();
+  const mine = iface + speed + runner.total;
+  const spd = Number(token.actor?.system?.stats?.spd ?? iceData(token)?.spd ?? 0);
+  const yours = spd + theirs.total;
+  return {
+    name: token.name, mine, yours, spd,
+    beatenBy: yours > mine,
+    line: `Interface ${iface}${speed ? ` + Speed ${speed}` : ""} + ${runner.total}${runner.note} = <b>${mine}</b> against ${esc(token.name)}'s SPD ${spd} + ${theirs.total}${theirs.note} = <b>${yours}</b>`,
+  };
+}
+
+/** Put a token in a combat if it is not already there, and hand back its combatant. */
+async function combatantFor(combat, scene, token) {
+  const found = combat.combatants.find((x) => x.tokenId === token.id);
+  if (found) return found;
+  const [made] = await combat.createEmbeddedDocuments("Combatant", [
+    { tokenId: token.id, sceneId: scene.id, actorId: token.actorId },
+  ]);
+  return made;
+}
+
+/* The runner's body is usually already in a fight somewhere else, and ICE joins that queue
+   rather than starting a second one, so the active combat wins over one tied to this scene.
+   Only when there is no combat at all does the NET start its own, and then the avatar goes
+   in first so the ICE has someone to be above. */
+async function combatFor(scene, avatar) {
+  /* game.combat is whichever combat belongs to the scene on screen, which is the wrong one the
+     moment the GM is looking at the NET. The fight that is actually running is the active one. */
+  const existing = game.combats?.find((c) => c.active)
+    ?? game.combats?.find((c) => c.scene?.id === scene.id)
+    ?? game.combat;
+  if (existing) return existing;
+  const combat = await Combat.create({ scene: scene.id, active: true });
+  const runner = await combatantFor(combat, scene, avatar);
+  await combat.rollInitiative([runner.id], { messageOptions: { rollMode: "gmroll" } }).catch(() => {});
+  return combat;
+}
+
+/** Wake a token: it stops lying in wait and enters the order above everyone else. */
+async function wake(combat, scene, token) {
+  await token.update({ [`flags.${ID}.${SLEEPING}`]: false }, { cprNetarch: true });
+  const c = await combatantFor(combat, scene, token);
+  const highest = Math.max(0, ...combat.combatants.map((x) => Number(x.initiative) || 0));
+  await combat.setInitiative(c.id, highest + 1);
+  if (!combat.started && combat.turns?.length) await combat.startCombat().catch(() => {});
+  return combat;
+}
+
+/** The runner has stepped into a room. Anything lying in wait there rolls against them. */
+async function enterFloor(scene, avatar, floor) {
+  const actor = avatar.actor;
+  const sleepers = sleepersOn(scene, floor);
+  if (!actor || !sleepers.length) return;
+  const combat = await combatFor(scene, avatar);
+  const lines = [];
+  for (const t of sleepers) {
+    if (t.actor.type === "demon") {
+      lines.push(`<b>${esc(t.name)}</b> is a Demon: no SPD to contest. It knows you are here.`);
+    } else {
+      const r = await speedContest(actor, t);
+      lines.push(`${r.line}<br>${r.beatenBy
+        ? `<span style="color:#b22">${esc(r.name)} is faster. Its effect lands now.</span> ${await landEffect(actor, t)}`
+        : `<span style="color:#272">${r.name} is too slow for a free hit.</span>`}`);
+    }
+    await wake(combat, scene, t);
+  }
+  await ChatMessage.create({
+    speaker: { alias: "NET Architecture" },
+    whisper: whisperFor(actor),
+    content: `<div class="cpr-netarch-summary"><h3>Floor ${floor.n}</h3>${lines.join("<hr style=\"margin:4px 0\">")}
+      <p style="font-size:0.9em;opacity:0.8">Awake and at the top of the order.</p></div>`,
+  });
+}
+
+/* A runner's avatar moving between rooms is what wakes a floor. The hook fires after
+   the move, so the token already holds its new position and the old one is gone; the
+   avatar therefore carries the floor it was last seen on. Only the GM's client acts,
+   so the work happens once however many people are watching. */
+const FLOOR_FLAG = "floor";
+
+async function avatarMoved(scene, avatar) {
+  const now = floorOfToken(avatar);
+  const was = avatar.getFlag(ID, FLOOR_FLAG) ?? null;
+  const n = now?.n ?? null;
+  if (n === was) return;
+  await avatar.update({ [`flags.${ID}.${FLOOR_FLAG}`]: n }, { cprNetarch: true });
+  if (now) await enterFloor(scene, avatar, now);
+}
+
+Hooks.on("updateToken", (doc, changes, options) => {
+  if (!game.user.isGM || options?.cprNetarch) return;
+  if (!("x" in changes) && !("y" in changes)) return;
+  if (!doc.getFlag(ID, "avatarOf") || !netRecord(doc.parent)) return;
+  avatarMoved(doc.parent, doc).catch(reportErr);
+});
+
 /** The DV a Scanner check needs here: the architecture's tier DV, read from the build record. */
 function scanDv(scene) {
   const net = scene.getFlag(ID, "net");
@@ -1022,7 +1453,7 @@ async function scanner() {
   if (!token) return ui.notifications.warn("Select your token first.");
   if (token.getFlag(ID, "avatarOf")) return ui.notifications.warn("Scanner is a Meat Action. Do it from your body, not the NET.");
   const actor = token.actor;
-  const role = actor?.items?.find((i) => i.type === "role" && (String(i.system?.mainRoleAbility ?? "").toLowerCase() === "interface" || /netrunner/i.test(i.name)));
+  const role = netrunnerRole(actor);
   if (!role) return ui.notifications.warn(`${actor?.name ?? "This token"} has no Netrunner role to Scan with.`);
   const g = scene.grid.size, per = scene.grid.distance || 2;
   const metres = (t) => (Math.hypot(t.x - token.x, t.y - token.y) / g) * per;
@@ -1446,4 +1877,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, buildSceneData, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, landEffect, iceActorData, demonActorData, summaryHtml };

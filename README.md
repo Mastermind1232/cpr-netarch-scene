@@ -57,3 +57,21 @@ node test/harness.js
 ## Scanner
 
 Shift+J (or the plug button on the token HUD) is the mechanical act: it jacks the body in beside a found access point within 6 metres, or jacks out if already in. J on its own only changes the view, jumping between the body on the floor and the NET token; the NET is virtual, so the body still sees the room and the runner can flip between the two at will. Shift+S (or the dish button on the token HUD) is the Scanner Meat Action. It runs the system's own Interface check (the CPR roll dialog with mods and LUCK, 3D dice, the CPR roll card) against a DV set by distance to the nearest unfound access point: 6 within 20 m, 9 within 30 m, 13 within 40 m, 21 beyond. On a miss within 2 of the DV the chat gives the point's direction (one of eight compass points) without revealing it. Every Scan posts the roll card and a one-line outcome to chat, without the DV. Jack In and Jack Out post a one-line notice. On a success the nearest unfound access point is revealed and every player character on the scene gains a detection mode that senses found access points through walls, on their own level only, so it never shows from inside the NET. The GM's eye toggle on a point flips it between found and not found. The check must be made from the body, not the NET avatar.
+
+## Walking into a room
+
+Moving a jacked-in avatar into a room resolves the floor. Every piece of Black ICE lying in wait there is contested: the runner's Interface, plus any Speed bonus from an Active Effect, plus a d10 that explodes on a 10 and implodes on a 1, against the ICE's SPD plus the same kind of d10. The ICE lands its effect only if it beats the runner's check; a tie is not a win. Either way it wakes and enters the Initiative Queue at the top, one above the highest initiative in the order. A Demon has no SPD, so it is not contested and simply wakes. ICE that is already awake is not rolled against again, and an avatar that re-enters a room it has already cleared triggers nothing.
+
+The ICE joins whichever combat is currently active rather than the one belonging to the scene on screen, because the runner's body is usually in a fight elsewhere. If no combat is running at all, one is created on the NET scene with the avatar in it and started. The result of the floor is whispered to the GM and to whoever owns the avatar.
+
+Of each landed effect, brain damage and NET Action penalties are applied directly: brain damage comes off HP without armour and cannot cause a Critical Injury, and the pool for the following turn is reduced on the spot. Everything else is rolled so the number is on the table and left for the GM. A Liche's three stat losses, a Scorpion's MOVE loss and an anti-program ICE's damage to REZ are rolled and stated; an Asp names the Program it destroys, picked at random from the equipped deck, without deleting it. The card says which parts were applied.
+
+When the last runner jacks out safely the Architecture's defenses reset: every woken piece of ICE goes back to lying in wait and leaves the initiative queue.
+
+## NET Actions
+
+Cyberpunk RED has no NET Action counter and neither does the system, so the module keeps one. The pool is read off the Interface rank printed on the role item: ranks 1 to 3 give 2, 4 to 6 give 3, 7 to 9 give 4, and rank 10 gives 5. Active Effects that raise the Interface check do not widen the pool.
+
+The count is drawn above the Interface Abilities on the Fight tab, which is where CPR already lists them, so it appears only when a cyberdeck is equipped and the tab is in Netspace mode. Clicking Backdoor, Cloak, Control, Eye-Dee, Pathfinder, Slide, Virus or Zap takes one. Scanner is a Meat Action and Defense and Speed are not actions, so none of the three costs anything. Running out does not block the roll; it posts a warning and leaves the call to the GM. The count is taken when the link is clicked, so a roll cancelled at CPR's dialog still costs one: clicking the number gives one back, and the arrow beside it refills the pool.
+
+The pool refills at the start of the runner's turn in combat, less anything owed to it. A Wisp, which reduces NET Actions by one on the turn after it hits, leaves that debt on the pool and it is paid off by the refill. The floor of two is a floor on the pool, not a cap on the reduction, so three Wisps on a rank 9 runner still leave a pool of two.

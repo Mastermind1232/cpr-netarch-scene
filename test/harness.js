@@ -9,6 +9,7 @@ const settings = new Map();
 const game = {
   settings: { register(m, k, c) { settings.set(`${m}.${k}`, c.default); }, get(m, k) { return settings.get(`${m}.${k}`); } },
   user: { isGM: true }, modules: { get: () => ({}) }, actors: [], folders: [], packs: [],
+  system: { id: "cyberpunk-red-core" },
   keybindings: { register() {} },
 };
 const ui = { notifications: { info() {}, warn() {}, error() {} } };
@@ -18,9 +19,13 @@ hooks.init.forEach((f) => f());
 const M = globalThis.CPRNetArch;
 
 let pass = 0, fail = 0;
+/* Async tests run one after another rather than all at once: several of them stub the same
+   globals, and overlapping them would have each pulling the others' dice out of the queue. */
+let queue = Promise.resolve();
 function check(name, fn) {
-  try { fn(); pass++; console.log(`ok   ${name}`); }
-  catch (err) { fail++; console.log(`FAIL ${name}: ${err.message}`); }
+  const won = () => { pass++; console.log(`ok   ${name}`); };
+  const lost = (err) => { fail++; console.log(`FAIL ${name}: ${err.message}`); };
+  queue = queue.then(() => Promise.resolve().then(fn).then(won, lost));
 }
 const assert = (c, msg) => { if (!c) throw new Error(msg); };
 const eq = (a, b, msg) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${msg}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`); };
@@ -414,5 +419,267 @@ check("T18 the brief reads the right figures for ICE, Demons and nodes", () => {
   eq(brief({ kind: "ice", name: "Nonsense" }), "", "an unknown name is silent");
 });
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+
+check("T19 a built record carries each floor's contents and the space it was laid in", () => {
+  const arch = M.parseText("1: Password DV10\n2: Wisp x2\n3: File");
+  const placed = M.layout(arch);
+  const { record } = M.buildSceneData(arch, placed, { name: "t", backdrop: "b", art: "a", tierDv: 8 });
+  eq(record.sp, M.NET_SPACE, "a NET of its own is laid out in NET_SPACE");
+  eq(record.floors[0].items, [{ kind: "node", node: "password", dv: 10 }], "an explicit DV survives");
+  eq(record.floors[2].items, [{ kind: "node", node: "file", dv: 8 }], "a bare node takes the tier's DV");
+  eq(record.floors[1].items, [{ kind: "ice", name: "Wisp", count: 2 }], "ice keeps its count");
+});
+
+check("T20 a point resolves to the floor whose room holds it", () => {
+  const arch = M.parseText("1: Password DV10\n2: Wisp\n3: File");
+  const placed = M.layout(arch);
+  const { record } = M.buildSceneData(arch, placed, { name: "t", backdrop: "b", art: "a", tierDv: 8 });
+  const scene = { flags: { [M.ID]: record }, grid: { size: M.G } };
+  const sp = record.sp;
+  const at = (cell, dx, dy) => {
+    const R = M.roomAt(cell);
+    return M.floorOfPoint(scene, (sp.padX + R.x + dx) * sp.g, (sp.padY + R.y + dy) * sp.g);
+  };
+  for (const f of record.floors) {
+    eq(at(f.cell, 0.5, 0.5)?.n, f.n, `the middle of floor ${f.n} reads as floor ${f.n}`);
+    eq(at(f.cell, M.ROOM - 0.01, M.ROOM - 0.01)?.n, f.n, `the far corner of floor ${f.n} still reads as it`);
+  }
+  // the corridor to the left of floor 1 belongs to no floor
+  eq(at(record.floors[0].cell, -1.5, 0.5), null, "the entry corridor is not a floor");
+  eq(M.floorOfPoint({ flags: {} }, 0, 0), null, "a scene with no NET has no floors");
+});
+
+check("T21 a floor is read from a token's centre, not its corner", () => {
+  const arch = M.parseText("1: Wisp\n2: File");
+  const placed = M.layout(arch);
+  const { record } = M.buildSceneData(arch, placed, { name: "t", backdrop: "b", art: "a", tierDv: 8 });
+  const sp = record.sp;
+  const scene = { flags: { [M.ID]: record }, grid: { size: sp.g } };
+  const R = M.roomAt(record.floors[1].cell);
+  // a 1x1 token whose corner sits one square left of floor 2 still has its centre outside it
+  const corner = { parent: scene, x: (sp.padX + R.x - 1) * sp.g, y: (sp.padY + R.y) * sp.g, width: 1, height: 1 };
+  eq(M.floorOfToken(corner)?.n ?? null, null, "a token left of the room is not in it");
+  const inside = { parent: scene, x: (sp.padX + R.x) * sp.g, y: (sp.padY + R.y) * sp.g, width: 1, height: 1 };
+  eq(M.floorOfToken(inside)?.n, record.floors[1].n, "a token in the room is in it");
+  eq(M.floorOfToken(null), null, "no token, no floor");
+});
+
+check("T22 a NET laid under a map reads from its own offset", () => {
+  const arch = M.parseText("1: Wisp\n2: File");
+  const placed = M.layout(arch);
+  const sp = { g: 100, padX: 7, padY: 40 };          // as buildUnder computes it
+  const { record } = M.buildSceneData(arch, placed, { name: "t", backdrop: "b", art: "a", tierDv: 8, sp });
+  eq(record.sp, sp, "the record keeps the space it was laid in");
+  const scene = { flags: {}, getFlag: (m, k) => (k === "net" ? record : undefined), grid: { size: sp.g } };
+  const R = M.roomAt(record.floors[0].cell);
+  eq(M.floorOfPoint(scene, (sp.padX + R.x + 0.5) * sp.g, (sp.padY + R.y + 0.5) * sp.g)?.n, 1, "floor 1 found at the map's offset");
+  // the same pixel read against NET_SPACE would be the wrong room, or none
+  const wrong = { flags: { [M.ID]: { ...record, sp: M.NET_SPACE } }, grid: { size: sp.g } };
+  assert(M.floorOfPoint(wrong, (sp.padX + R.x + 0.5) * sp.g, (sp.padY + R.y + 0.5) * sp.g)?.n !== 1,
+    "ignoring the stored offset must not land on floor 1 by accident");
+});
+
+/* A fake actor built the way CPR builds one: a role item for the rank, and Active Effects
+   whose changes carry the Interface-ability bonuses. */
+function fakeRunner({ rank = 0, effects = [], hp = 30, programs = [], flags = {} } = {}) {
+  const a = {
+    name: "Cipher",
+    items: [
+      { type: "role", name: "Netrunner", system: { mainRoleAbility: "Interface", rank } },
+      ...programs.map((name) => ({ type: "program", name })),
+    ],
+    system: { derivedStats: { hp: { value: hp, max: hp } } },
+    allApplicableEffects: () => effects,
+    flags,
+    getFlag: (m, k) => flags[k],
+    setFlag: async (m, k, v) => { flags[k] = v; return a; },
+    update: async (data) => {
+      if ("system.derivedStats.hp.value" in data) a.system.derivedStats.hp.value = data["system.derivedStats.hp.value"];
+      return a;
+    },
+  };
+  return a;
+}
+// a queue-fed stand-in for Foundry's Roll, so every die in a test is known in advance
+function stubRoll(queue) {
+  globalThis.Roll = class {
+    constructor(formula) { this.formula = formula; }
+    async evaluate() { this.total = queue.shift(); return this; }
+  };
+}
+const effect = (key, value, extra = {}) => ({
+  disabled: false, system: { isSuppressed: false },
+  changes: [{ key, value, mode: 2 }],
+  flags: { "cyberpunk-red-core": { changes: { cats: ["role"], situational: [extra.situational ?? { isSituational: false, onByDefault: false }] } } },
+  ...(extra.effect ?? {}),
+});
+
+check("T23 a runner's Interface is the role rank plus whatever Active Effects add", () => {
+  eq(M.interfaceOf(fakeRunner({ rank: 5 })), 5, "a plain rank");
+  eq(M.interfaceOf(fakeRunner({ rank: 5, effects: [effect("bonuses.interface", 2)] })), 7, "a flat bonus counts");
+  eq(M.interfaceOf(fakeRunner({ rank: 5, effects: [effect("bonuses.speed", 2)] })), 5, "a Speed bonus is not an Interface bonus");
+  eq(M.interfaceOf(null), 0, "no actor, no Interface");
+  const off = effect("bonuses.interface", 3); off.disabled = true;
+  eq(M.interfaceOf(fakeRunner({ rank: 5, effects: [off] })), 5, "a disabled effect is ignored");
+  const sup = effect("bonuses.interface", 3); sup.system.isSuppressed = true;
+  eq(M.interfaceOf(fakeRunner({ rank: 5, effects: [sup] })), 5, "a suppressed effect is ignored");
+  const sit = effect("bonuses.interface", 3, { situational: { isSituational: true, onByDefault: false } });
+  eq(M.interfaceOf(fakeRunner({ rank: 5, effects: [sit] })), 5, "a situational effect that is off stays off");
+  const on = effect("bonuses.interface", 3, { situational: { isSituational: true, onByDefault: true } });
+  eq(M.interfaceOf(fakeRunner({ rank: 5, effects: [on] })), 8, "a situational effect that is on by default counts");
+  eq(M.netBonus(fakeRunner({ effects: [effect("bonuses.speed", 2)] }), "speed"), 2, "the Speed bonus is readable on its own");
+});
+
+check("T24 ICE figures are read from the actor's name, so a renamed token still works", () => {
+  eq(M.iceData({ name: "TEST Wisp (ICE)", actor: { name: "Wisp" } })?.spd, 4, "the actor's name wins");
+  eq(M.iceData({ name: "Raven", actor: null })?.spd, 4, "a token with no actor falls back to its own name");
+  eq(M.iceData({ name: "Nonsense", actor: { name: "Nonsense" } }), null, "an unknown name has no figures");
+  eq(M.iceData({ name: "TEST Wisp (ICE)", actor: { name: "TEST Wisp (ICE)" } })?.spd, 4, "a name written around the ICE's still finds it");
+  eq(M.iceData({ name: "Wispish", actor: { name: "Wispish" } }), null, "but a longer word is not a match");
+});
+
+check("T25 only sleeping ICE on this floor is woken", () => {
+  const arch = M.parseText("1: Wisp\n2: Raven");
+  const { record } = M.buildSceneData(arch, M.layout(arch), { name: "t", backdrop: "b", art: "a", tierDv: 8 });
+  const sp = record.sp;
+  const tok = (cell, name, type, flags = {}) => {
+    const R = M.roomAt(cell);
+    return {
+      name, width: 1, height: 1, actor: { name, type },
+      x: (sp.padX + R.x) * sp.g, y: (sp.padY + R.y) * sp.g,
+      getFlag: (m, k) => flags[k],
+    };
+  };
+  const [f1, f2] = record.floors;
+  const all = [
+    tok(f1.cell, "Wisp", "blackIce"),
+    tok(f1.cell, "Awake One", "blackIce", { asleep: false }),
+    tok(f1.cell, "Cipher", "character", { avatarOf: "x" }),
+    tok(f2.cell, "Raven", "blackIce"),
+  ];
+  const scene = { flags: { [M.ID]: record }, grid: { size: sp.g }, tokens: { filter: (fn) => all.filter(fn) } };
+  all.forEach((t) => { t.parent = scene; });
+  eq(M.sleepersOn(scene, f1).map((t) => t.name), ["Wisp"], "only the sleeping ICE on floor 1");
+  eq(M.sleepersOn(scene, f2).map((t) => t.name), ["Raven"], "floor 2 has its own");
+  eq(M.sleepersOn(scene, null), [], "nowhere is nothing");
+});
+
+check("T26 the Speed contest is opposed, and only a win lands the effect", async () => {
+  const queue = [];
+  stubRoll(queue);
+  const ice = { name: "Wisp", actor: { name: "Wisp", type: "blackIce", system: { stats: { spd: 4 } } } };
+  // runner Interface 5 + 2 = 7 against the Wisp's SPD 4 + 9 = 13
+  queue.push(2, 9);
+  let r = await M.speedContest(fakeRunner({ rank: 5 }), ice);
+  eq([r.mine, r.yours, r.beatenBy], [7, 13, true], "the ICE wins and lands its effect");
+  // the same rolls, but a Speedy Gonzalvez giving +2 Speed, and a tie goes to the runner
+  queue.push(6, 7);
+  r = await M.speedContest(fakeRunner({ rank: 5, effects: [effect("bonuses.speed", 2)] }), ice);
+  eq([r.mine, r.yours, r.beatenBy], [13, 11, false], "the Speed bonus is added to the runner's side");
+  assert(r.line.includes("Speed 2"), "and it is shown in the result");
+  queue.push(6, 7);
+  r = await M.speedContest(fakeRunner({ rank: 5 }), ice);
+  eq([r.mine, r.yours, r.beatenBy], [11, 11, false], "a tie is not a win for the ICE");
+  delete globalThis.Roll;
+});
+
+check("T27 the NET Action table is read off the Interface rank", () => {
+  const at = (rank) => M.baseNetActions(fakeRunner({ rank }));
+  eq([at(1), at(2), at(3)], [2, 2, 2], "rank 1 to 3 gives 2");
+  eq([at(4), at(5), at(6)], [3, 3, 3], "rank 4 to 6 gives 3");
+  eq([at(7), at(8), at(9)], [4, 4, 4], "rank 7 to 9 gives 4");
+  eq(at(10), 5, "rank 10 gives 5");
+  eq(at(12), 5, "nothing above the table reads past it");
+  eq(at(0), 0, "no Interface, no NET Actions");
+  // a bonus to the Interface check does not widen the table
+  eq(M.baseNetActions(fakeRunner({ rank: 3, effects: [effect("bonuses.interface", 4)] })), 2, "bonuses raise checks, not the pool");
+});
+
+check("T28 the pool spends down, refills on a Turn, and pays off what it owes", async () => {
+  const cipher = fakeRunner({ rank: 5 });
+  eq(M.netPool(cipher), { max: 3, left: 3, penalty: 0 }, "an untouched runner starts full");
+  await M.spendNetAction(cipher);
+  eq(M.netPool(cipher).left, 2, "a spent action is gone");
+  await M.spendNetAction(cipher);
+  await M.spendNetAction(cipher);
+  eq(M.netPool(cipher).left, 0, "the pool empties");
+  const over = await M.spendNetAction(cipher);
+  eq([over.left, over.short], [0, true], "spending past empty is flagged but not blocked");
+  await M.refillNetActions(cipher);
+  eq(M.netPool(cipher), { max: 3, left: 3, penalty: 0 }, "a new Turn refills it");
+
+  await M.chargeNetActions(cipher, 1);
+  eq(M.netPool(cipher).penalty, 1, "a Wisp leaves a debt on the current Turn");
+  eq(M.netPool(cipher).left, 3, "but this Turn is untouched");
+  eq((await M.refillNetActions(cipher)), { max: 2, penalty: 1 }, "the next Turn is one short");
+  eq(M.netPool(cipher), { max: 2, left: 2, penalty: 0 }, "and the debt is paid off");
+  await M.refillNetActions(cipher);
+  eq(M.netPool(cipher).max, 3, "the Turn after that is whole again");
+
+  // the floor is on the pool, not on the size of the reduction: three Wisps on a rank 5 runner
+  await M.chargeNetActions(cipher, 3);
+  eq((await M.refillNetActions(cipher)).max, 2, "a pool never drops below 2");
+  // and a rank 9 runner takes the full hit
+  const big = fakeRunner({ rank: 9 });
+  await M.chargeNetActions(big, 3);
+  eq((await M.refillNetActions(big)).max, 2, "4 less 3 is 1, floored to 2");
+  const mid = fakeRunner({ rank: 9 });
+  await M.chargeNetActions(mid, 1);
+  eq((await M.refillNetActions(mid)).max, 3, "4 less 1 is 3, above the floor");
+});
+
+check("T29 only the eight NET Actions cost one", () => {
+  for (const a of ["backdoor", "cloak", "control", "eyedee", "pathfinder", "slide", "virus", "zap"])
+    assert(M.NET_ABILITIES.has(a), `${a} is a NET Action`);
+  for (const a of ["scanner", "defense", "speed"])
+    assert(!M.NET_ABILITIES.has(a), `${a} is not a NET Action`);
+});
+
+check("T30 every piece of ICE has an effect, and a Wisp's lands on HP and the pool", async () => {
+  for (const name of Object.keys(M.ICE)) assert(M.ICE_EFFECT[name], `${name} has no effect written`);
+
+  const queue = [];
+  stubRoll(queue);
+  const cipher = fakeRunner({ rank: 5, hp: 30 });
+  const wisp = { name: "Wisp", actor: { name: "Wisp", type: "blackIce" } };
+  queue.push(4);
+  const text = await M.landEffect(cipher, wisp);
+  eq(M.iceName({ name: "TEST Wisp (ICE)", actor: { name: "TEST Wisp (ICE)" } }), "Wisp", "a renamed token still lands the right effect");
+  eq(cipher.system.derivedStats.hp.value, 26, "4 brain damage comes straight off HP");
+  eq(M.netPool(cipher).penalty, 1, "and the next Turn owes one NET Action");
+  assert(text.includes("Applied:"), "the card says what it did");
+  assert(text.includes("HP 30 to 26"), "and names the HP it took");
+  assert(text.includes("pool 2 instead of 3"), "and the pool the next Turn gets");
+
+  // a Giant hits HP but hands the jack out back to the GM
+  queue.push(11);
+  const giant = { name: "Giant", actor: { name: "Giant", type: "blackIce" } };
+  const g = await M.landEffect(fakeRunner({ rank: 5, hp: 30 }), giant);
+  assert(g.includes("unsafely jacked out"), "the Giant's jack out is announced");
+  assert(!g.includes("pool"), "a Giant costs no NET Actions");
+
+  // an Asp names a Program on the deck rather than deleting it
+  const armed = fakeRunner({ rank: 5, programs: ["Armor"] });
+  const asp = await M.landEffect(armed, { name: "Asp", actor: { name: "Asp", type: "blackIce" } });
+  assert(asp.includes("Armor"), "the Asp names the Program it destroys");
+  assert(!asp.includes("Applied:"), "but does not delete it");
+  const bare = await M.landEffect(fakeRunner({ rank: 5 }), { name: "Asp", actor: { name: "Asp", type: "blackIce" } });
+  assert(bare.includes("has none"), "a runner with no Programs is said to have none");
+
+  // anti-program ICE rolls its number and leaves the target to the GM
+  queue.push(17);
+  const dragon = await M.landEffect(fakeRunner({ rank: 5 }), { name: "Dragon", actor: { name: "Dragon", type: "blackIce" } });
+  assert(dragon.includes("<b>17</b>"), "the Dragon's 6d6 is rolled");
+  assert(dragon.includes("one Program"), "but no Program is picked");
+
+  // a Liche rolls all three stats
+  queue.push(2, 5, 6);
+  const liche = await M.landEffect(fakeRunner({ rank: 5 }), { name: "Liche", actor: { name: "Liche", type: "blackIce" } });
+  assert(/INT &minus;2, REF &minus;5, DEX &minus;6/.test(liche), `the Liche rolls each stat: ${liche}`);
+  delete globalThis.Roll;
+});
+
+queue.then(() => {
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+});
