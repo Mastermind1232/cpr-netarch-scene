@@ -1284,7 +1284,10 @@ function open() {
     .cpr-netarch .hint { font-size:11px; opacity:0.8; margin:4px 0 0; }
     /* What each piece of ICE does, under the row that picks it. Full width so it wraps
        below the dropdowns rather than beside them. */
-    .cpr-netarch .brief { flex:0 0 100%; margin:1px 0 2px 26px; font-size:11px; line-height:1.35; opacity:0.78; }
+    /* box-sizing plus padding rather than a margin: a margin on a 100% flex basis
+       pushes the line past the row and it clips instead of wrapping. */
+    .cpr-netarch .brief { flex:0 0 100%; box-sizing:border-box; padding-left:26px; margin:1px 0 2px;
+      font-size:11px; line-height:1.35; opacity:0.78; white-space:normal; overflow-wrap:anywhere; }
     .cpr-netarch .brief b { opacity:0.95; }
     .cpr-netarch .brief .st { display:inline-block; font-family:monospace; font-size:10.5px; letter-spacing:0.2px; margin-right:6px; opacity:0.85; }
   </style>
