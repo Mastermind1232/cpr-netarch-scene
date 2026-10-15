@@ -1112,6 +1112,24 @@ Hooks.once("ready", () => {
   else { const orig = proto._onClickLeft2; proto._onClickLeft2 = function (...args) { return handler.call(this, orig.bind(this), ...args); }; }
 });
 
+/* CPR's sheet lists Scanner among the interface abilities, but its link only rolls
+   Interface and posts the number: it has no idea what architecture the runner is
+   standing in, so nothing is found. Shift+S, or the dish on the token HUD, is the
+   one that rolls against a DV set by distance and reveals the access point. Two
+   things called Scanner, one of which does nothing, is worse than one, so the sheet's
+   row is taken out. */
+Hooks.on("renderActorSheet", (app, html) => {
+  try {
+    const root = html instanceof HTMLElement ? html : html?.[0];
+    if (!root) return;
+    for (const a of root.querySelectorAll('[data-interface-ability="scanner"]')) {
+      a.closest("li")?.remove() ?? a.remove();
+    }
+  } catch (err) {
+    console.warn(`${ID} | could not take Scanner off the sheet`, err);
+  }
+});
+
 Hooks.on("renderTokenHUD", (hud, html) => {
   try {
     const root = html instanceof HTMLElement ? html : html[0];
