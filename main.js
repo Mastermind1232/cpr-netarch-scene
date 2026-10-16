@@ -926,7 +926,18 @@ async function jackIn(scene, bodyId) {
 }
 
 /** Jacking in and out are both NET Actions. Takes one and says what is left. */
+/* A NET Action is a per-Turn budget, so jacking only costs one when there is a Turn to spend it
+   out of: a combat that has already started, with this runner in it. Jacking in to an empty
+   Architecture off the clock costs nothing, and says nothing. */
+function turnRunning(actor) {
+  if (!actor) return false;
+  const combat = game.combats?.find((c) => c.active && c.started);
+  if (!combat) return false;
+  return !!combat.combatants?.find((c) => c.actor === actor || (actor.id && c.actor?.id === actor.id));
+}
+
 async function netActionCost(actor) {
+  if (!turnRunning(actor)) return "";
   const r = await spendNetAction(actor);
   if (!r) return "";
   return r.short
@@ -1890,4 +1901,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, landEffect, iceActorData, demonActorData, summaryHtml };

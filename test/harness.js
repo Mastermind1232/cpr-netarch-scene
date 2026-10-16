@@ -635,6 +635,33 @@ check("T28 the pool spends down, refills on a Turn, and pays off what it owes", 
   eq((await M.refillNetActions(mid)).max, 3, "4 less 1 is 3, above the floor");
 });
 
+check("T31 jacking only costs a NET Action while a Turn is actually running", async () => {
+  const cipher = fakeRunner({ rank: 5 });
+  const was = game.combats;
+
+  game.combats = [];
+  assert(!M.turnRunning(cipher), "no combat at all means no Turn");
+  eq(await M.netActionCost(cipher), "", "and jacking says nothing");
+  eq(M.netPool(cipher).left, 3, "and costs nothing");
+
+  // a combat that exists but has not been started yet is still not a Turn
+  game.combats = [{ active: true, started: false, combatants: [{ actor: cipher }] }];
+  assert(!M.turnRunning(cipher), "an unstarted combat is not a Turn");
+  eq(M.netPool(cipher).left, 3, "so the pool is untouched");
+
+  // a running fight the runner is not part of gives them no Turn to spend out of
+  game.combats = [{ active: true, started: true, combatants: [{ actor: fakeRunner({ rank: 4 }) }] }];
+  assert(!M.turnRunning(cipher), "someone else's fight is not the runner's Turn");
+  eq(M.netPool(cipher).left, 3, "so still nothing spent");
+
+  game.combats = [{ active: true, started: true, combatants: [{ actor: cipher }] }];
+  assert(M.turnRunning(cipher), "a started fight with the runner in it is a Turn");
+  assert((await M.netActionCost(cipher)).includes("2 left"), "now jacking costs one and says so");
+  eq(M.netPool(cipher).left, 2, "and the pool drops");
+
+  game.combats = was;
+});
+
 check("T29 only the eight NET Actions cost one", () => {
   for (const a of ["backdoor", "cloak", "control", "eyedee", "pathfinder", "slide", "virus", "zap"])
     assert(M.NET_ABILITIES.has(a), `${a} is a NET Action`);
