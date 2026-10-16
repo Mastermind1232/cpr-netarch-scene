@@ -545,12 +545,15 @@ function floorOfPoint(scene, x, y) {
 }
 
 /** The floor a token is standing in, measured from its centre so a token larger than
-    one square is judged by where it actually is rather than by its corner. */
-function floorOfToken(token) {
+    one square is judged by where it actually is rather than by its corner. `at` overrides
+    the position, for a token whose document has not caught up with where it has moved to. */
+function floorOfToken(token, at = null) {
   if (!token) return null;
   const scene = token.parent ?? token.scene;
   const g = scene?.grid?.size ?? G;
-  return floorOfPoint(scene, token.x + ((token.width ?? 1) * g) / 2, token.y + ((token.height ?? 1) * g) / 2);
+  const x = at?.x ?? token.x;
+  const y = at?.y ?? token.y;
+  return floorOfPoint(scene, x + ((token.width ?? 1) * g) / 2, y + ((token.height ?? 1) * g) / 2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -919,14 +922,23 @@ async function jackIn(scene, bodyId) {
     await scene.setFlag(ID, "fogWas", true);
     await scene.update({ "fog.exploration": false });
   }
-  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks in.</b>` });
+  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks in.</b>${await netActionCost(body.actor)}` });
+}
+
+/** Jacking in and out are both NET Actions. Takes one and says what is left. */
+async function netActionCost(actor) {
+  const r = await spendNetAction(actor);
+  if (!r) return "";
+  return r.short
+    ? ` <span style="opacity:.75">A NET Action, and there were none left this Turn.</span>`
+    : ` <span style="opacity:.75">A NET Action. ${r.left} left this Turn.</span>`;
 }
 
 async function jackOut(scene, bodyId) {
   const avatar = avatarOf(scene, bodyId);
   const body = scene.tokens.get(bodyId);
   avatar?.object?.release?.();
-  if (avatar && body) await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks out.</b>` });
+  if (avatar && body) await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks out.</b>${await netActionCost(body.actor)}` });
   if (!avatar) return;
   await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
   if (scene.tokens.some((t) => t.getFlag(ID, "avatarOf"))) return;
@@ -1377,14 +1389,15 @@ async function enterFloor(scene, avatar, floor) {
   });
 }
 
-/* A runner's avatar moving between rooms is what wakes a floor. The hook fires after
-   the move, so the token already holds its new position and the old one is gone; the
-   avatar therefore carries the floor it was last seen on. Only the GM's client acts,
-   so the work happens once however many people are watching. */
+/* A runner's avatar moving between rooms is what wakes a floor. The hook fires with the
+   token document still holding where it came from, so the destination is read out of the
+   update itself; measuring the document instead resolves every move one move late. The
+   avatar carries the floor it was last seen on, since there is nothing else to compare
+   against. Only the GM's client acts, so the work happens once however many are watching. */
 const FLOOR_FLAG = "floor";
 
-async function avatarMoved(scene, avatar) {
-  const now = floorOfToken(avatar);
+async function avatarMoved(scene, avatar, at = null) {
+  const now = floorOfToken(avatar, at);
   const was = avatar.getFlag(ID, FLOOR_FLAG) ?? null;
   const n = now?.n ?? null;
   if (n === was) return;
@@ -1396,7 +1409,7 @@ Hooks.on("updateToken", (doc, changes, options) => {
   if (!game.user.isGM || options?.cprNetarch) return;
   if (!("x" in changes) && !("y" in changes)) return;
   if (!doc.getFlag(ID, "avatarOf") || !netRecord(doc.parent)) return;
-  avatarMoved(doc.parent, doc).catch(reportErr);
+  avatarMoved(doc.parent, doc, { x: changes.x ?? doc.x, y: changes.y ?? doc.y }).catch(reportErr);
 });
 
 /** The DV a Scanner check needs here: the architecture's tier DV, read from the build record. */
@@ -1877,4 +1890,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, landEffect, iceActorData, demonActorData, summaryHtml };

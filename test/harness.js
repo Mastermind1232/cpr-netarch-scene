@@ -462,6 +462,13 @@ check("T21 a floor is read from a token's centre, not its corner", () => {
   const inside = { parent: scene, x: (sp.padX + R.x) * sp.g, y: (sp.padY + R.y) * sp.g, width: 1, height: 1 };
   eq(M.floorOfToken(inside)?.n, record.floors[1].n, "a token in the room is in it");
   eq(M.floorOfToken(null), null, "no token, no floor");
+
+  /* The hook fires with the document still holding where the token came from, so the floor
+     has to be read from the update's own coordinates or every move resolves one move late. */
+  const stale = { parent: scene, x: corner.x, y: corner.y, width: 1, height: 1 };
+  eq(M.floorOfToken(stale)?.n ?? null, null, "the document alone still reads the old square");
+  eq(M.floorOfToken(stale, { x: inside.x, y: inside.y })?.n, record.floors[1].n, "the update's coordinates find the room");
+  eq(M.floorOfToken(inside, { x: corner.x, y: corner.y }), null, "and moving out of a room reads as out of it");
 });
 
 check("T22 a NET laid under a map reads from its own offset", () => {
