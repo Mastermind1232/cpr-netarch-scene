@@ -922,23 +922,39 @@ async function jackIn(scene, bodyId) {
     await scene.setFlag(ID, "fogWas", true);
     await scene.update({ "fog.exploration": false });
   }
-  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks in.</b>${await netActionCost(body.actor)}` });
+  await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks in.</b>${await netActionCost(body)}` });
 }
 
 /** Jacking in and out are both NET Actions. Takes one and says what is left. */
-/* A NET Action is a per-Turn budget, so jacking only costs one when there is a Turn to spend it
-   out of: a combat that has already started, with this runner in it. Jacking in to an empty
-   Architecture off the clock costs nothing, and says nothing. */
-function turnRunning(actor) {
-  if (!actor) return false;
-  const combat = game.combats?.find((c) => c.active && c.started);
-  if (!combat) return false;
-  return !!combat.combatants?.find((c) => c.actor === actor || (actor.id && c.actor?.id === actor.id));
+/* Which fight a token is actually in. Neither of Foundry's own answers can be trusted here:
+   `game.combat` and `game.combats.active` are both scoped to the scene on screen, which is the
+   wrong scene the moment the GM looks at the NET, and a combat on any other scene keeps its
+   `active` flag for the life of the world, because Combat#activate only clears the flag on
+   combats for the scene in view. Scanning the world for an active combat therefore hands back
+   the oldest one still flagged, which may be a fight from a previous session. The only reliable
+   answer is the combat holding this very token. */
+function combatOf(token) {
+  if (!token) return null;
+  const sceneId = token.parent?.id;
+  const holding = (game.combats ?? []).filter((c) => c.combatants
+    ?.some?.((x) => x.tokenId === token.id && (!x.sceneId || !sceneId || x.sceneId === sceneId)));
+  return holding.find((c) => c.started && c.active)
+    ?? holding.find((c) => c.started)
+    ?? holding.find((c) => c.active)
+    ?? holding[0]
+    ?? null;
 }
 
-async function netActionCost(actor) {
-  if (!turnRunning(actor)) return "";
-  const r = await spendNetAction(actor);
+/* A NET Action is a per-Turn budget, so jacking only costs one when there is a Turn to spend it
+   out of: a started fight holding this runner's own token. Jacking in to an empty Architecture
+   off the clock costs nothing, and says nothing. */
+function turnRunning(token) {
+  return !!combatOf(token)?.started;
+}
+
+async function netActionCost(body) {
+  if (!turnRunning(body)) return "";
+  const r = await spendNetAction(body?.actor);
   if (!r) return "";
   return r.short
     ? ` <span style="opacity:.75">A NET Action, and there were none left this Turn.</span>`
@@ -949,7 +965,7 @@ async function jackOut(scene, bodyId) {
   const avatar = avatarOf(scene, bodyId);
   const body = scene.tokens.get(bodyId);
   avatar?.object?.release?.();
-  if (avatar && body) await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks out.</b>${await netActionCost(body.actor)}` });
+  if (avatar && body) await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks out.</b>${await netActionCost(body)}` });
   if (!avatar) return;
   await scene.deleteEmbeddedDocuments("Token", [avatar.id]);
   if (scene.tokens.some((t) => t.getFlag(ID, "avatarOf"))) return;
@@ -971,6 +987,19 @@ async function resetDefenses(scene) {
   for (const combat of game.combats ?? []) {
     const ids = combat.combatants.filter((c) => woken.some((t) => t.id === c.tokenId)).map((c) => c.id);
     if (ids.length) await combat.deleteEmbeddedDocuments("Combatant", ids);
+  }
+  await dropOurCombats(scene);
+}
+
+/* A combat this module opened keeps `active: true` for the life of the world once the GM looks at
+   another scene, so an empty one left behind would be picked up as "the running fight" by anything
+   scanning for an active combat. The run is over, so it goes. */
+async function dropOurCombats(scene) {
+  for (const combat of [...(game.combats ?? [])]) {
+    if (!combat.getFlag?.(ID, "ours")) continue;
+    const stale = combat.combatants.filter((c) => !c.token).map((c) => c.id);
+    if (stale.length) await combat.deleteEmbeddedDocuments("Combatant", stale);
+    if (!combat.combatants.size) await combat.delete().catch((e) => reportErr(e));
   }
 }
 
@@ -1352,13 +1381,14 @@ async function combatantFor(combat, scene, token) {
    Only when there is no combat at all does the NET start its own, and then the avatar goes
    in first so the ICE has someone to be above. */
 async function combatFor(scene, avatar) {
-  /* game.combat is whichever combat belongs to the scene on screen, which is the wrong one the
-     moment the GM is looking at the NET. The fight that is actually running is the active one. */
-  const existing = game.combats?.find((c) => c.active)
-    ?? game.combats?.find((c) => c.scene?.id === scene.id)
-    ?? game.combat;
+  /* The fight holding the runner's own body, or failing that their avatar. Only if no fight holds
+     either does this fall back to one started on this very scene, which keeps a stale combat from
+     another scene out of it. See combatOf for why an `active` scan cannot be trusted. */
+  const body = scene.tokens.get(bodyIdOf(avatar));
+  const here = (game.combats ?? []).filter((c) => c.started && c.scene?.id === scene.id);
+  const existing = combatOf(body) ?? combatOf(avatar) ?? here.find((c) => c.active) ?? here[0];
   if (existing) return existing;
-  const combat = await Combat.create({ scene: scene.id, active: true });
+  const combat = await Combat.create({ scene: scene.id, active: true, flags: { [ID]: { ours: true } } });
   const runner = await combatantFor(combat, scene, avatar);
   await combat.rollInitiative([runner.id], { messageOptions: { rollMode: "gmroll" } }).catch(() => {});
   return combat;
@@ -1370,7 +1400,11 @@ async function wake(combat, scene, token) {
   const c = await combatantFor(combat, scene, token);
   const highest = Math.max(0, ...combat.combatants.map((x) => Number(x.initiative) || 0));
   await combat.setInitiative(c.id, highest + 1);
-  if (!combat.started && combat.turns?.length) await combat.startCombat().catch(() => {});
+  /* Only a fight this module opened gets started automatically. An encounter the GM has staged in
+     the tracker but not begun is theirs to begin; the ICE joins it and waits. */
+  if (!combat.started && combat.turns?.length && combat.getFlag(ID, "ours")) {
+    await combat.startCombat().catch((e) => reportErr(e));
+  }
   return combat;
 }
 
@@ -1901,4 +1935,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, landEffect, iceActorData, demonActorData, summaryHtml };

@@ -635,30 +635,64 @@ check("T28 the pool spends down, refills on a Turn, and pays off what it owes", 
   eq((await M.refillNetActions(mid)).max, 3, "4 less 1 is 3, above the floor");
 });
 
+const fakeCombat = ({ started = true, active = true, scene = "sceneA", holds = [], ours = false } = {}) => ({
+  started, active, scene: { id: scene }, getFlag: (m, k) => (k === "ours" ? ours : undefined),
+  combatants: holds.map((t) => ({ tokenId: t.id, sceneId: t.parent.id })),
+});
+
 check("T31 jacking only costs a NET Action while a Turn is actually running", async () => {
   const cipher = fakeRunner({ rank: 5 });
+  const body = { id: "body1", parent: { id: "sceneA" }, actor: cipher };
   const was = game.combats;
 
   game.combats = [];
-  assert(!M.turnRunning(cipher), "no combat at all means no Turn");
-  eq(await M.netActionCost(cipher), "", "and jacking says nothing");
+  assert(!M.turnRunning(body), "no combat at all means no Turn");
+  eq(await M.netActionCost(body), "", "and jacking says nothing");
   eq(M.netPool(cipher).left, 3, "and costs nothing");
 
   // a combat that exists but has not been started yet is still not a Turn
-  game.combats = [{ active: true, started: false, combatants: [{ actor: cipher }] }];
-  assert(!M.turnRunning(cipher), "an unstarted combat is not a Turn");
-  eq(M.netPool(cipher).left, 3, "so the pool is untouched");
+  game.combats = [fakeCombat({ started: false, holds: [body] })];
+  assert(!M.turnRunning(body), "an unstarted combat is not a Turn");
+  eq(await M.netActionCost(body), "", "so jacking is still silent");
+  eq(M.netPool(cipher).left, 3, "and the pool is untouched");
 
   // a running fight the runner is not part of gives them no Turn to spend out of
-  game.combats = [{ active: true, started: true, combatants: [{ actor: fakeRunner({ rank: 4 }) }] }];
-  assert(!M.turnRunning(cipher), "someone else's fight is not the runner's Turn");
+  game.combats = [fakeCombat({ holds: [{ id: "someone-else", parent: { id: "sceneA" } }] })];
+  assert(!M.turnRunning(body), "someone else's fight is not the runner's Turn");
   eq(M.netPool(cipher).left, 3, "so still nothing spent");
 
-  game.combats = [{ active: true, started: true, combatants: [{ actor: cipher }] }];
-  assert(M.turnRunning(cipher), "a started fight with the runner in it is a Turn");
-  assert((await M.netActionCost(cipher)).includes("2 left"), "now jacking costs one and says so");
+  game.combats = [fakeCombat({ holds: [body] })];
+  assert(M.turnRunning(body), "a started fight holding the runner's token is a Turn");
+  assert((await M.netActionCost(body)).includes("2 left"), "now jacking costs one and says so");
   eq(M.netPool(cipher).left, 2, "and the pool drops");
 
+  game.combats = was;
+});
+
+check("T32 the fight is found by the token in it, never by scanning for an active combat", () => {
+  const was = game.combats;
+  const body = { id: "body1", parent: { id: "sceneA" } };
+
+  /* The bug this guards: Combat#activate only clears the active flag on combats for the scene in
+     view, so last session's fight on another scene is still flagged active, and it is older, so
+     any `find(c => c.active)` reaches it first. */
+  const stale = fakeCombat({ scene: "sceneB", holds: [{ id: "old-token", parent: { id: "sceneB" } }] });
+  const real = fakeCombat({ scene: "sceneA", holds: [body] });
+  game.combats = [stale, real];
+  assert(M.combatOf(body) === real, "the fight holding this token wins over an older active one");
+  assert(game.combats.find((c) => c.active) === stale, "and the old way really would have picked the stale one");
+
+  // same token id on a different scene is a different token, and not this runner's fight
+  game.combats = [fakeCombat({ scene: "sceneB", holds: [{ id: "body1", parent: { id: "sceneB" } }] })];
+  eq(M.combatOf(body), null, "a matching id on another scene is not a match");
+
+  // a started fight is preferred over one merely flagged active
+  const idle = fakeCombat({ started: false, active: true, holds: [body] });
+  const live = fakeCombat({ started: true, active: false, holds: [body] });
+  game.combats = [idle, live];
+  assert(M.combatOf(body) === live, "a started fight beats an unstarted one that is flagged active");
+
+  eq(M.combatOf(null), null, "no token, no fight");
   game.combats = was;
 });
 
