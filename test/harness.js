@@ -879,6 +879,65 @@ check("T37 jacking in wakes every Demon in the build, and nothing else", () => {
   eq(woken.join(","), "Imp,Efreet", "only the sleeping Demons standing on a floor wake");
 });
 
+check("T38 Pathfinder reads as deep as the check and stops at the first thing it cannot read", () => {
+  const F = (n, items, path = "Main") => ({ n, path, items });
+  const node = (kind, dv) => ({ kind: "node", node: kind, dv });
+  const ice = (name, count = 1) => ({ kind: "ice", name, count });
+  const floors = [
+    F(1, [node("password", 8)]),
+    F(2, [ice("Wisp")]),
+    F(3, [node("control", 10)]),
+    F(4, [ice("Hellhound")]),
+    F(5, [node("control", 12)]),
+    F(6, [ice("Kraken")]),
+    F(7, [ice("Raven", 2)], "Vault"),
+  ];
+
+  // the count is the cap, on a path with nothing locked on it
+  const open = [F(1, [ice("Wisp")]), F(2, [ice("Raven", 2)]), F(3, [ice("Hellhound")]), F(4, [ice("Kraken")])];
+  const two = M.pathfinderReach(open, 1, "Main", 2);
+  eq(two.seen.map((f) => f.n).join(","), "1,2", "a check of 2 reads two floors");
+  eq(two.blocked, null, "and is stopped by range, not by a lock");
+  assert(two.short, "which it says");
+
+  // an imploded roll does not even clear the lobby, and the floor underfoot is all he gets
+  const bad = M.pathfinderReach(floors, 1, "Main", 2);
+  eq(bad.seen.map((f) => f.n).join(","), "1", "a check of 2 is stopped by the DV8 lobby");
+  eq(bad.blocked, 1, "on floor 1 itself");
+
+  // a DV above the check stops it, and the floor holding it is still seen
+  const ten = M.pathfinderReach(floors, 1, "Main", 10);
+  eq(ten.seen.map((f) => f.n).join(","), "1,2,3,4,5", "it reads down to the DV12 node");
+  eq(ten.blocked, 5, "and names the floor that stopped it");
+
+  // beat every DV and the whole path resolves
+  const twelve = M.pathfinderReach(floors, 1, "Main", 12);
+  eq(twelve.seen.map((f) => f.n).join(","), "1,2,3,4,5,6", "a check of 12 reads the whole path");
+  eq(twelve.blocked, null, "with nothing left sealed");
+  assert(!twelve.short, "and nothing left over");
+
+  // it reads on from where the runner stands, not from the top
+  eq(M.pathfinderReach(floors, 4, "Main", 2).seen.map((f) => f.n).join(","), "4,5",
+    "the count starts at the runner's own floor");
+
+  // a branch is a different way down, never more of this one
+  assert(!M.pathfinderReach(floors, 1, "Main", 20).seen.some((f) => f.path === "Vault"),
+    "the other path is never walked");
+});
+
+check("T39 Pathfinder never prints a DV", () => {
+  const floor = { n: 1, items: [
+    { kind: "node", node: "password", dv: 8 },
+    { kind: "node", node: "control", dv: 12 },
+    { kind: "ice", name: "Raven", count: 2 },
+    { kind: "demon", name: "Efreet" },
+  ] };
+  const text = M.floorPlain(floor);
+  eq(text, "Password, Control Node, Raven x2, Efreet", "it names what is there");
+  assert(!/dv|\b8\b|\b12\b/i.test(text), `and no DV survives: ${text}`);
+  eq(M.floorPlain({ n: 2, items: [] }), "an empty room", "an empty floor still reads as something");
+});
+
 queue.then(() => {
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

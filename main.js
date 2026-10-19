@@ -145,6 +145,36 @@ function parseText(text) {
   return { main, branches };
 }
 
+/* What Pathfinder is allowed to say. RAW it shows what is on a floor and never the DV of anything,
+   so this cannot be entryText and must not be built from the tokens on the map: those are named
+   "Password DV8" and would hand over every DV in the Architecture. */
+function entryPlain(it) {
+  if (it.kind === "node") return NODE_LABEL[it.node];
+  if (it.kind === "ice") return it.name + (it.count > 1 ? ` x${it.count}` : "");
+  return it.name;
+}
+const floorPlain = (f) => (f.items ?? []).map(entryPlain).join(", ") || "an empty room";
+
+/* How far a Pathfinder check reads. RAW: a number of floors equal to the check, or up to the first
+   obstruction with a DV higher than the check, whichever comes first. The obstruction's own floor is
+   seen, since seeing it is how the runner knows it is there, and nothing past it is. Only the path
+   the runner is standing on is walked: a branch is a different way down, not more of this one. */
+function pathfinderReach(floors, startN, path, check) {
+  const on = path ?? "Main";
+  const ahead = (floors ?? [])
+    .filter((f) => (f.path ?? "Main") === on && f.n >= startN)
+    .sort((a, b) => a.n - b.n);
+  const seen = [];
+  let blocked = null;
+  for (const f of ahead) {
+    if (seen.length >= check) break;
+    seen.push(f);
+    const dv = Math.max(0, ...(f.items ?? []).map((i) => Number(i.dv) || 0));
+    if (dv > check) { blocked = f.n; break; }
+  }
+  return { seen, blocked, short: blocked === null && seen.length < ahead.length };
+}
+
 function entryText(it) {
   if (it.kind === "node") return NODE_LABEL[it.node] + (it.dv ? ` DV${it.dv}` : "");
   if (it.kind === "ice") return it.name + (it.count > 1 ? ` x${it.count}` : "");
@@ -1311,10 +1341,21 @@ Hooks.on("renderActorSheet", (app, html) => {
 
   list.addEventListener("click", (ev) => {
     const link = ev.target.closest?.('a[data-roll-type="interfaceAbility"]');
-    if (!link || !NET_ABILITIES.has(link.dataset.interfaceAbility)) return;
-    spendNetAction(actor).then((r) => {
+    const ability = link?.dataset?.interfaceAbility;
+    if (!link || !NET_ABILITIES.has(ability)) return;
+    const spend = () => spendNetAction(actor).then((r) => {
       if (r?.short) ui.notifications.warn(`${actor.name} had no NET Actions left this Turn.`);
-    }).catch(reportErr);
+    });
+    /* Pathfinder is the one ability whose result the module needs, and the sheet's own roll never
+       returns it. The click is taken over so the same CPR check runs through interfaceCheck, which
+       hands back the total. Adding a second way in would charge the Turn twice for one ability. */
+    if (ability === "pathfinder" && netRecord(canvas?.scene)) {
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      spend().then(() => pathfinder(actor)).catch(reportErr);
+      return;
+    }
+    spend().catch(reportErr);
   }, true);
 });
 
@@ -1661,6 +1702,39 @@ async function scanner() {
   if (game.user.isGM) return handleSocket(msg);
   if (!game.users.activeGM) return ui.notifications.warn("No GM is online to reveal what you found.");
   game.socket.emit(SOCKET, msg);
+}
+
+/* Pathfinder. Taken over from the sheet rather than followed, because CPR's own roll never hands
+   the total back and the number of floors read is the total. The NET Action is charged by the click
+   handler before this runs, so nothing is spent twice. */
+async function pathfinder(actor) {
+  const scene = canvas?.scene;
+  const rec = netRecord(scene);
+  if (!rec) return ui.notifications.warn("There is no NET architecture here.");
+  const avatar = scene.tokens.find((t) => t.getFlag(ID, "avatarOf") && t.actorId === actor.id);
+  if (!avatar) return ui.notifications.warn("Pathfinder is a NET Action. Jack in first.");
+  const role = netrunnerRole(actor);
+  if (!role) return ui.notifications.warn(`${actor.name} has no Netrunner role to run Pathfinder with.`);
+  const here = floorOfToken(avatar);
+  const total = await interfaceCheck(actor, avatar, role);
+  if (total === null) return;
+
+  const { seen, blocked, short } = pathfinderReach(rec.floors, here?.n ?? 1, here?.path, total);
+  const lines = seen.map((f) => `<b>${f.n}</b>. ${esc(floorPlain(f))}`);
+  const tail = blocked !== null
+    ? `<p>Floor ${blocked} is sealed against something this check could not read. Nothing below it resolves.</p>`
+    : short ? `<p>The map runs out before the Architecture does.</p>`
+    : `<p>That is the whole of it.</p>`;
+  const paths = new Set((rec.floors ?? []).map((f) => f.path ?? "Main"));
+  paths.delete(here?.path ?? "Main");
+  const branch = paths.size ? `<p>The Architecture forks. Another way down exists and this is not it.</p>` : "";
+  await ChatMessage.create({
+    speaker: { alias: "NET Architecture" },
+    whisper: whisperFor(actor),
+    content: `<div class="cpr-netarch-summary"><h3>Pathfinder</h3>${
+      seen.length ? `<p>${lines.join("<br>")}</p>` : `<p>Nothing resolves. The floor underfoot is all there is.</p>`
+    }${tail}${branch}</div>`,
+  });
 }
 
 /** Switches the viewer between their body and their NET avatar. */
@@ -2063,4 +2137,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, demonsToWake, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, accessPointSpot, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, demonsToWake, entryPlain, floorPlain, pathfinderReach, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, accessPointSpot, landEffect, iceActorData, demonActorData, summaryHtml };

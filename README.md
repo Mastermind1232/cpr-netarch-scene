@@ -70,6 +70,16 @@ Of each landed effect, brain damage and NET Action penalties are applied directl
 
 When the last runner jacks out safely the Architecture's defenses reset: every woken piece of ICE goes back to lying in wait and leaves the initiative queue.
 
+## Pathfinder
+
+Pathfinder is the one Interface Ability the module resolves itself, because the number of floors it reads is the check total and the sheet's own roll never hands that back. Clicking Pathfinder on the Fight tab, with a NET Architecture on the scene, runs the same CPR check the sheet would have run, with the roll dialog, LUCK and the CPR roll card, and then posts what was read. The NET Action is taken once, by the click, exactly as it is for every other ability.
+
+The runner reads a number of floors equal to the check, counting from the floor they are standing on, and stops at the first floor holding anything whose DV is higher than the check. That floor is still read, since seeing the lock is how they know it is there, and nothing below it is. Only the path the runner is on is walked: a branch is reported as existing and never read down.
+
+The card names what is on each floor and never a DV, which is what the rule says and is why it is built from the build record rather than from the tokens on the map. The tokens are named "Password DV8" and would give away every DV in the Architecture.
+
+The card is whispered to the runner and the GM. Nothing it reveals wakes anything: ICE is only contested when the avatar walks into its room.
+
 ## NET Actions
 
 Cyberpunk RED has no NET Action counter and neither does the system, so the module keeps one. The pool is read off the Interface rank printed on the role item: ranks 1 to 3 give 2, 4 to 6 give 3, 7 to 9 give 4, and rank 10 gives 5. Active Effects that raise the Interface check do not widen the pool.
