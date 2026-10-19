@@ -488,9 +488,10 @@ check("T22 a NET laid under a map reads from its own offset", () => {
 
 /* A fake actor built the way CPR builds one: a role item for the rank, and Active Effects
    whose changes carry the Interface-ability bonuses. */
-function fakeRunner({ rank = 0, effects = [], hp = 30, programs = [], flags = {} } = {}) {
+function fakeRunner({ rank = 0, effects = [], hp = 30, programs = [], flags = {}, wound = 0 } = {}) {
   const a = {
     name: "Cipher",
+    getWoundStateMods: () => wound,
     items: [
       { type: "role", name: "Netrunner", system: { mainRoleAbility: "Interface", rank } },
       ...programs.map((name) => ({ type: "program", name })),
@@ -694,6 +695,62 @@ check("T32 the fight is found by the token in it, never by scanning for an activ
 
   eq(M.combatOf(null), null, "no token, no fight");
   game.combats = was;
+});
+
+/* An Active Effect as CPR stores one, so netBonus reads it the way the system would. */
+const fx = (key, value) => ({ disabled: false, system: {}, changes: [{ key, value: String(value) }] });
+
+check("T33 the Armor program comes off brain damage, and HP never goes below zero", async () => {
+  const wisp = { name: "Wisp", actor: { name: "Wisp", type: "blackIce", system: { stats: { spd: 4 } } } };
+
+  // Armor lowers all brain damage received by 4
+  const armored = fakeRunner({ rank: 5, hp: 30, effects: [fx("bonuses.brainDamageReduction", 4)] });
+  stubRoll([6]);
+  const said = await M.landEffect(armored, wisp);
+  eq(armored.system.derivedStats.hp.value, 28, "6 less 4 is 2");
+  assert(said.includes("less 4 brain damage reduction"), "and the card shows the reduction");
+  assert(!/Armor does not reduce/.test(said), "and no longer claims Armor does not apply");
+
+  // reduction bigger than the hit does not heal anybody
+  const tanky = fakeRunner({ rank: 5, hp: 30, effects: [fx("bonuses.brainDamageReduction", 9)] });
+  stubRoll([3]);
+  await M.landEffect(tanky, wisp);
+  eq(tanky.system.derivedStats.hp.value, 30, "a soaked hit does nothing");
+
+  // hp.value is a NumberField with min 0, so the card must not promise a negative
+  const dying = fakeRunner({ rank: 5, hp: 4 });
+  stubRoll([6]);
+  const card = await M.landEffect(dying, wisp);
+  eq(dying.system.derivedStats.hp.value, 0, "HP bottoms out at zero");
+  assert(card.includes("HP 4 to 0"), `the card reports what the sheet will hold: ${card}`);
+
+  // and with no reduction at all nothing changes about the old behaviour
+  const bare = fakeRunner({ rank: 5, hp: 30 });
+  stubRoll([5]);
+  await M.landEffect(bare, wisp);
+  eq(bare.system.derivedStats.hp.value, 25, "a plain hit still lands in full");
+});
+
+check("T34 the wound penalty is on the Speed Contest, because its own damage causes it", async () => {
+  const wisp = { name: "Wisp", actor: { name: "Wisp", type: "blackIce", system: { stats: { spd: 4 } } } };
+
+  stubRoll([5, 5]);
+  const well = await M.speedContest(fakeRunner({ rank: 5 }), wisp);
+  eq(well.mine, 10, "Interface 5 plus a 5");
+
+  stubRoll([5, 5]);
+  const hurt = await M.speedContest(fakeRunner({ rank: 5, wound: -2 }), wisp);
+  eq(hurt.mine, 8, "Seriously Wounded takes 2 off");
+  assert(hurt.line.includes("2 wounded"), `and the card says so: ${hurt.line}`);
+
+  stubRoll([5, 5]);
+  const dying = await M.speedContest(fakeRunner({ rank: 5, wound: -4 }), wisp);
+  eq(dying.mine, 6, "Mortally Wounded takes 4 off");
+
+  // allActions rides along the same way CPR applies it
+  stubRoll([5, 5]);
+  const helped = await M.speedContest(fakeRunner({ rank: 5, effects: [fx("bonuses.allActions", 1)] }), wisp);
+  eq(helped.mine, 11, "an allActions bonus counts too");
 });
 
 check("T29 only the eight NET Actions cost one", () => {

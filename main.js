@@ -593,6 +593,10 @@ function demonActorData(name, art, folder = null) {
 /*  Foundry glue                                                       */
 /* ------------------------------------------------------------------ */
 
+/* The one GM client that does work on everyone's behalf. `game.user.isGM` is true on every
+   GM-role client at once, which is how the same work ends up running twice. */
+const theGM = () => game.user === game.users?.activeGM;
+
 function reportErr(err) {
   console.error(`${ID} |`, err);
   ui.notifications?.error(`NET Architecture: ${err?.message ?? err}. See the console (F12).`);
@@ -904,10 +908,25 @@ function nearAccessPoint(token) {
   return scene.tokens.some((t) => t.getFlag(ID, "accessPoint") && t.getFlag(ID, "scanned") && !t.hidden && Math.hypot(t.x - token.x, t.y - token.y) <= reach);
 }
 
+/* Two clicks on the plug send two socket messages, and the check for an existing avatar sits
+   before an await, so both would pass it and create one. A second avatar is not cosmetic: jack out
+   deletes only the first, so "has the last runner left" never becomes true and the architecture
+   never resets its defenses or restores fog. */
+const jacking = new Set();
+
 async function jackIn(scene, bodyId) {
   const body = scene.tokens.get(bodyId);
   const net = scene.getFlag(ID, "net");
-  if (!body || !net || avatarOf(scene, bodyId)) return;
+  if (!body || !net || avatarOf(scene, bodyId) || jacking.has(bodyId)) return;
+  jacking.add(bodyId);
+  try {
+    await jackInNow(scene, body, bodyId, net);
+  } finally {
+    jacking.delete(bodyId);
+  }
+}
+
+async function jackInNow(scene, body, bodyId, net) {
   const data = body.toObject();
   delete data._id;
   data.name = `${body.name} (NET)`;
@@ -962,6 +981,16 @@ async function netActionCost(body) {
 }
 
 async function jackOut(scene, bodyId) {
+  if (jacking.has(bodyId)) return;
+  jacking.add(bodyId);
+  try {
+    await jackOutNow(scene, bodyId);
+  } finally {
+    jacking.delete(bodyId);
+  }
+}
+
+async function jackOutNow(scene, bodyId) {
   const avatar = avatarOf(scene, bodyId);
   const body = scene.tokens.get(bodyId);
   avatar?.object?.release?.();
@@ -1209,10 +1238,11 @@ async function spendNetAction(actor, n = 1) {
   return { ...pool, left, short: pool.left < n };
 }
 
-/* Foundry fires updateCombat for every client, so the refill is left to the GM. A runner whose
-   Turn comes round gets their pool back; everyone else is left alone. */
+/* Foundry fires updateCombat for every client, so the refill is left to one GM. `isGM` is true on
+   every connected GM-role client, including a second tab and any assistant GM, so the work is
+   pinned to the active GM instead; otherwise each of them repeats it. */
 Hooks.on("updateCombat", (combat, changes) => {
-  if (!game.user.isGM) return;
+  if (!theGM()) return;
   if (!("turn" in changes) && !("round" in changes)) return;
   const actor = combat.combatant?.actor;
   if (!actor || !baseNetActions(actor)) return;
@@ -1304,6 +1334,14 @@ const ICE_EFFECT = {
 
 const sum = async (formula) => (await new Roll(formula).evaluate()).total;
 
+/* Brain damage ignores worn and implanted armour, but not the Armor program, which "lowers all
+   brain damage received by 4". CPR's own damage application adds brainDamageReduction and
+   universalDamageReduction together for a brain hit (cpr-actor.js _applyDamage), so this does
+   the same, through the same Active Effect filter the rest of the module uses. */
+function brainSoak(actor) {
+  return Math.max(0, netBonus(actor, "brainDamageReduction") + netBonus(actor, "universalDamageReduction"));
+}
+
 /** A Program on the runner's equipped deck, picked at random, for the ICE that destroys one. */
 function randomProgram(actor) {
   const deck = actor?.getEquippedCyberdeck?.();
@@ -1321,12 +1359,17 @@ async function landEffect(actor, iceToken) {
   const said = [], done = [];
   if (spec.first) said.push(esc(spec.first));
   if (spec.brain) {
-    const hp = await sum(spec.brain);
+    const rolled = await sum(spec.brain);
+    const soak = brainSoak(actor);
+    const hp = Math.max(0, rolled - soak);
     const now = Number(actor.system?.derivedStats?.hp?.value);
-    said.push(`<b>${hp}</b> to the brain (${spec.brain}). Armor does not reduce it and it cannot cause a Critical Injury.`);
+    said.push(`<b>${rolled}</b> to the brain (${spec.brain})${soak ? `, less ${soak} brain damage reduction, so <b>${hp}</b>` : ""}. Worn armor does not reduce it and it cannot cause a Critical Injury.`);
     if (Number.isFinite(now)) {
-      await actor.update({ "system.derivedStats.hp.value": now - hp });
-      done.push(`HP ${now} to ${now - hp}`);
+      /* hp.value is a NumberField with min 0, and v12 cleans before validating, so a negative
+         would be silently clamped and the card would report a number the sheet never held. */
+      const left = Math.max(0, now - hp);
+      await actor.update({ "system.derivedStats.hp.value": left });
+      done.push(`HP ${now} to ${left}`);
     }
   }
   if (spec.netActions) {
@@ -1354,15 +1397,19 @@ async function landEffect(actor, iceToken) {
 async function speedContest(actor, token) {
   const iface = interfaceOf(actor);
   const speed = netBonus(actor, "speed");
+  /* CPR puts the wound penalty and allActions on every Interface roll (cpr-cyberdeck.js), and the
+     module's own brain damage is what wounds the runner, so leaving it out made each contest
+     easier exactly as the runner got closer to dying. */
+  const wound = Number(actor.getWoundStateMods?.() ?? 0) + netBonus(actor, "allActions");
   const runner = await checkDie();
   const theirs = await checkDie();
-  const mine = iface + speed + runner.total;
+  const mine = iface + speed + wound + runner.total;
   const spd = Number(token.actor?.system?.stats?.spd ?? iceData(token)?.spd ?? 0);
   const yours = spd + theirs.total;
   return {
     name: token.name, mine, yours, spd,
     beatenBy: yours > mine,
-    line: `Interface ${iface}${speed ? ` + Speed ${speed}` : ""} + ${runner.total}${runner.note} = <b>${mine}</b> against ${esc(token.name)}'s SPD ${spd} + ${theirs.total}${theirs.note} = <b>${yours}</b>`,
+    line: `Interface ${iface}${speed ? ` + Speed ${speed}` : ""}${wound ? ` ${wound < 0 ? "-" : "+"} ${Math.abs(wound)} wounded` : ""} + ${runner.total}${runner.note} = <b>${mine}</b> against ${esc(token.name)}'s SPD ${spd} + ${theirs.total}${theirs.note} = <b>${yours}</b>`,
   };
 }
 
@@ -1451,7 +1498,9 @@ async function avatarMoved(scene, avatar, at = null) {
 }
 
 Hooks.on("updateToken", (doc, changes, options) => {
-  if (!game.user.isGM || options?.cprNetarch) return;
+  /* Must be one client only. Two GM tabs would each resolve the floor: every Speed Contest rolled
+     twice, brain damage subtracted twice from two separate reads of hp.value, two cards. */
+  if (!theGM() || options?.cprNetarch) return;
   if (!("x" in changes) && !("y" in changes)) return;
   if (!doc.getFlag(ID, "avatarOf") || !netRecord(doc.parent)) return;
   avatarMoved(doc.parent, doc, { x: changes.x ?? doc.x, y: changes.y ?? doc.y }).catch(reportErr);
@@ -1900,10 +1949,19 @@ function open() {
 
 /* Leftovers from earlier builds: pins from the map-pin experiment, and points marked found while still hidden. Cleared once, on the GM's load. */
 Hooks.once("ready", async () => {
-  if (!game.user.isGM) return;
+  /* repairPending subtracts the same offset from every placeable it shifted, so a second GM client
+     running it would move the map twice as far back and nothing records that it already ran. */
+  if (!theGM()) return;
   for (const scene of game.scenes) {
     if (scene.getFlag(ID, "pending")) await repairPending(scene).catch(reportErr);
     if (!scene.getFlag(ID, "net")) continue;
+    /* Fog memory is paused while anyone is jacked in and restored by the last jack out, so a
+       session that ends with a runner still in the NET would otherwise discard every player's
+       explored fog for that scene permanently. */
+    if (scene.getFlag(ID, "fogWas") !== undefined && !scene.tokens.some((t) => t.getFlag(ID, "avatarOf"))) {
+      await scene.update({ "fog.exploration": true }).catch(reportErr);
+      await scene.unsetFlag(ID, "fogWas").catch(reportErr);
+    }
     const pins = scene.notes.filter((n) => n.getFlag(ID, "accessPin")).map((n) => n.id);
     if (pins.length) await scene.deleteEmbeddedDocuments("Note", pins).catch(reportErr);
     const stuck = scene.tokens.filter((t) => t.getFlag(ID, "accessPoint") && t.hidden && t.getFlag(ID, "scanned")).map((t) => ({ _id: t.id, [`flags.${ID}.scanned`]: false }));
