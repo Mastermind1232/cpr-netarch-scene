@@ -1339,7 +1339,23 @@ const sum = async (formula) => (await new Roll(formula).evaluate()).total;
    universalDamageReduction together for a brain hit (cpr-actor.js _applyDamage), so this does
    the same, through the same Active Effect filter the rest of the module uses. */
 function brainSoak(actor) {
-  return Math.max(0, netBonus(actor, "brainDamageReduction") + netBonus(actor, "universalDamageReduction"));
+  const brain = netBonus(actor, "brainDamageReduction");
+  const universal = netBonus(actor, "universalDamageReduction");
+  /* CPR ships the Armor program with no Active Effect of its own, in this version and in its own
+     compendium, so nothing would ever supply the 4 the program prints. The program's rez state is
+     read directly instead. An Active Effect that does supply brain damage reduction takes over, so
+     a world that has wired one up is not counted twice. */
+  const armor = brain > 0 || !rezzedArmor(actor) ? 0 : 4;
+  return Math.max(0, brain + universal + armor);
+}
+
+/** True when a program named Armor is installed on the equipped deck and currently rezzed. */
+function rezzedArmor(actor) {
+  const deck = actor?.getEquippedCyberdeck?.();
+  const programs = deck?.getInstalledItems?.("program")
+    ?? actor?.items?.filter?.((i) => i.type === "program")
+    ?? [];
+  return programs.some((p) => p?.system?.isRezzed && /\barmor\b/i.test(p.name ?? ""));
 }
 
 /** A Program on the runner's equipped deck, picked at random, for the ICE that destroys one. */
@@ -1993,4 +2009,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, landEffect, iceActorData, demonActorData, summaryHtml };

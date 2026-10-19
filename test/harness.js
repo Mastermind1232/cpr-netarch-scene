@@ -731,6 +731,31 @@ check("T33 the Armor program comes off brain damage, and HP never goes below zer
   eq(bare.system.derivedStats.hp.value, 25, "a plain hit still lands in full");
 });
 
+check("T35 a rezzed Armor program supplies the 4 that CPR never attaches to it", () => {
+  const prog = (name, isRezzed) => ({ type: "program", name, system: { isRezzed } });
+  const withDeck = (programs) => {
+    const a = fakeRunner({ rank: 5 });
+    a.items = [...a.items, ...programs];
+    a.getEquippedCyberdeck = () => ({ getInstalledItems: () => programs });
+    return a;
+  };
+
+  eq(M.brainSoak(withDeck([prog("Armor", true)])), 4, "rezzed Armor lowers brain damage by 4");
+  eq(M.brainSoak(withDeck([prog("Armor", false)])), 0, "an unrezzed Armor does nothing");
+  eq(M.brainSoak(withDeck([prog("Sword", true)])), 0, "another program does nothing");
+  eq(M.brainSoak(withDeck([])), 0, "an empty deck does nothing");
+
+  // a world that has wired up its own Active Effect is not counted twice
+  const wired = withDeck([prog("Armor", true)]);
+  wired.allApplicableEffects = () => [fx("bonuses.brainDamageReduction", 4)];
+  eq(M.brainSoak(wired), 4, "an Active Effect takes over rather than stacking with the fallback");
+
+  // universal damage reduction rides along, as CPR's own brain branch adds it
+  const both = withDeck([prog("Armor", true)]);
+  both.allApplicableEffects = () => [fx("bonuses.universalDamageReduction", 2)];
+  eq(M.brainSoak(both), 6, "universal reduction adds to the program's 4");
+});
+
 check("T34 the wound penalty is on the Speed Contest, because its own damage causes it", async () => {
   const wisp = { name: "Wisp", actor: { name: "Wisp", type: "blackIce", system: { stats: { spd: 4 } } } };
 
