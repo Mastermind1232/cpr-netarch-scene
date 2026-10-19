@@ -841,10 +841,13 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   const seamY = (padYnew + mapRows) * g;
   const seam = tagged("wall", { c: [0, seamY, dims.width, seamY], move: 20, sight: 20, light: 20, sound: 20, door: 0, ds: 0, dir: 0 }, { level: null, tag });
 
-  // The access point: hidden, at the middle of whatever the GM is looking at, dragged into place afterwards.
-  const pivot = canvas.stage.pivot;
+  // The access point: hidden, in the bottom left corner of the map itself, dragged into place
+  // afterwards. The centre of the GM's view put it wherever they happened to be scrolled, which on
+  // a tall scene is usually the black margin between the map and the NET, where a hidden token is
+  // invisible against the background.
+  const spot = accessPointSpot(dims.sceneX, dims.sceneY, before.height, g);
   const ap = tagged("token", {
-    name: "Access Point", x: Math.floor(pivot.x / g) * g, y: Math.floor((pivot.y + dy) / g) * g, width: 1, height: 1,
+    name: "Access Point", x: spot.x, y: spot.y, width: 1, height: 1,
     texture: { src: "icons/svg/net.svg", fit: "contain", anchorX: 0.5, anchorY: 0.5, scaleX: 1, scaleY: 1, tint: "#66ffcc" },
     actorId: null, actorLink: false, disposition: 0, displayName: 30, displayBars: 0, hidden: true, sight: { enabled: false },
   }, { level: null, tag });
@@ -858,7 +861,7 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   // Walls moved while the canvas was still settling leave their door icons behind; a clean draw clears them.
   if (canvas?.scene?.id === scene.id) await canvas.draw();
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
-  ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden at the centre of your view; drag it where it belongs.`);
+  ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden in the bottom left corner of the map; drag it where it belongs.`);
   if (visionWasOff) ui.notifications.warn(`${scene.name} had token vision off, so every player could have seen the NET through the seam. It has been turned on.`);
 }
 
@@ -898,6 +901,16 @@ const SOCKET = `module.${ID}`;
 
 /** The jacked-in copy of a body token, if there is one. */
 const avatarOf = (scene, bodyId) => scene.tokens.find((t) => t.getFlag(ID, "avatarOf") === bodyId) ?? null;
+
+/* The bottom left square of the map itself, which is where a freshly built access point waits.
+   The map tile is laid at the scene origin at its original size, so the floor's last row is one
+   square up from its bottom edge. */
+function accessPointSpot(sceneX, sceneY, mapHeight, g) {
+  /* Counted in squares from the scene origin rather than from zero, because a map whose height is
+     not a whole number of squares would otherwise leave the token hanging over the bottom edge. */
+  const rows = Math.max(0, Math.floor((mapHeight - g) / g));
+  return { x: sceneX, y: sceneY + rows * g };
+}
 
 /** True when a revealed access point is within the book's six metres of the token. */
 function nearAccessPoint(token) {
@@ -2009,4 +2022,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, accessPointSpot, landEffect, iceActorData, demonActorData, summaryHtml };

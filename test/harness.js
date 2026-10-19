@@ -731,6 +731,21 @@ check("T33 the Armor program comes off brain damage, and HP never goes below zer
   eq(bare.system.derivedStats.hp.value, 25, "a plain hit still lands in full");
 });
 
+check("T36 a new access point waits in the bottom left square of the map, not in the margin", () => {
+  /* The live test scene: 100px grid, a 2160-high casino map laid at the scene origin. 2160 is 21.6
+     squares, so the last square that fits entirely on the map starts 20 rows down, not 21. */
+  eq(M.accessPointSpot(1000, 400, 2160, 100), { x: 1000, y: 2400 }, "the map's last whole row, at its left edge");
+  // rows are counted from the scene origin, so padding that is not a multiple of the grid stays aligned to it
+  eq(M.accessPointSpot(1050, 450, 2160, 100), { x: 1050, y: 2450 }, "off-grid padding keeps its own alignment");
+  // a map shorter than one square still leaves the token on the map
+  eq(M.accessPointSpot(0, 0, 40, 100), { x: 0, y: 0 }, "a tiny map keeps it at the origin");
+  for (const h of [2160, 2000, 1999, 100, 101]) {
+    const spot = M.accessPointSpot(1000, 400, h, 100);
+    assert(spot.y + 100 <= 400 + Math.max(100, h), `a ${h}-high map keeps the token on it, not over the edge`);
+    assert(spot.y >= 400, `a ${h}-high map keeps the token at or below the top edge`);
+  }
+});
+
 check("T35 a rezzed Armor program supplies the 4 that CPR never attaches to it", () => {
   const prog = (name, isRezzed) => ({ type: "program", name, system: { isRezzed } });
   const withDeck = (programs) => {
