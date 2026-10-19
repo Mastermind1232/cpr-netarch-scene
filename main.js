@@ -841,11 +841,10 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   const seamY = (padYnew + mapRows) * g;
   const seam = tagged("wall", { c: [0, seamY, dims.width, seamY], move: 20, sight: 20, light: 20, sound: 20, door: 0, ds: 0, dir: 0 }, { level: null, tag });
 
-  // The access point: hidden, in the bottom left corner of the map itself, dragged into place
-  // afterwards. The centre of the GM's view put it wherever they happened to be scrolled, which on
-  // a tall scene is usually the black margin between the map and the NET, where a hidden token is
-  // invisible against the background.
-  const spot = accessPointSpot(dims.sceneX, dims.sceneY, before.height, g);
+  // The access point: hidden, in the middle of the map itself, dragged into place afterwards. The
+  // centre of the GM's view put it wherever they happened to be scrolled, which on a scene grown to
+  // hold a NET is usually the black margin below the map, where a hidden token cannot be seen.
+  const spot = accessPointSpot(dims.sceneX, dims.sceneY, before.width, before.height, g);
   const ap = tagged("token", {
     name: "Access Point", x: spot.x, y: spot.y, width: 1, height: 1,
     texture: { src: "icons/svg/net.svg", fit: "contain", anchorX: 0.5, anchorY: 0.5, scaleX: 1, scaleY: 1, tint: "#66ffcc" },
@@ -861,7 +860,7 @@ async function buildUnder({ tier, text, arch: rolled = null }) {
   // Walls moved while the canvas was still settling leave their door icons behind; a clean draw clears them.
   if (canvas?.scene?.id === scene.id) await canvas.draw();
   await whisperSummary(scene, floors, bottom, placed.notes, arch);
-  ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden in the bottom left corner of the map; drag it where it belongs.`);
+  ui.notifications.info(`NET laid beside ${scene.name}, below the map: ${floors.length} floors. The access point is hidden in the middle of the map; drag it where it belongs.`);
   if (visionWasOff) ui.notifications.warn(`${scene.name} had token vision off, so every player could have seen the NET through the seam. It has been turned on.`);
 }
 
@@ -902,14 +901,12 @@ const SOCKET = `module.${ID}`;
 /** The jacked-in copy of a body token, if there is one. */
 const avatarOf = (scene, bodyId) => scene.tokens.find((t) => t.getFlag(ID, "avatarOf") === bodyId) ?? null;
 
-/* The bottom left square of the map itself, which is where a freshly built access point waits.
-   The map tile is laid at the scene origin at its original size, so the floor's last row is one
-   square up from its bottom edge. */
-function accessPointSpot(sceneX, sceneY, mapHeight, g) {
-  /* Counted in squares from the scene origin rather than from zero, because a map whose height is
-     not a whole number of squares would otherwise leave the token hanging over the bottom edge. */
-  const rows = Math.max(0, Math.floor((mapHeight - g) / g));
-  return { x: sceneX, y: sceneY + rows * g };
+/* The middle square of the map itself, which is where a freshly built access point waits. The map
+   tile is laid at the scene origin at its original size, and squares are counted from that origin,
+   so a map whose size is not a whole number of squares still lands the token fully on it. */
+function accessPointSpot(sceneX, sceneY, mapWidth, mapHeight, g) {
+  const mid = (span) => Math.floor(Math.max(1, Math.floor(span / g)) / 2) * g;
+  return { x: sceneX + mid(mapWidth), y: sceneY + mid(mapHeight) };
 }
 
 /** True when a revealed access point is within the book's six metres of the token. */

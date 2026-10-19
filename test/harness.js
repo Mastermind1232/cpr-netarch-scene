@@ -731,18 +731,22 @@ check("T33 the Armor program comes off brain damage, and HP never goes below zer
   eq(bare.system.derivedStats.hp.value, 25, "a plain hit still lands in full");
 });
 
-check("T36 a new access point waits in the bottom left square of the map, not in the margin", () => {
-  /* The live test scene: 100px grid, a 2160-high casino map laid at the scene origin. 2160 is 21.6
-     squares, so the last square that fits entirely on the map starts 20 rows down, not 21. */
-  eq(M.accessPointSpot(1000, 400, 2160, 100), { x: 1000, y: 2400 }, "the map's last whole row, at its left edge");
-  // rows are counted from the scene origin, so padding that is not a multiple of the grid stays aligned to it
-  eq(M.accessPointSpot(1050, 450, 2160, 100), { x: 1050, y: 2450 }, "off-grid padding keeps its own alignment");
-  // a map shorter than one square still leaves the token on the map
-  eq(M.accessPointSpot(0, 0, 40, 100), { x: 0, y: 0 }, "a tiny map keeps it at the origin");
-  for (const h of [2160, 2000, 1999, 100, 101]) {
-    const spot = M.accessPointSpot(1000, 400, h, 100);
-    assert(spot.y + 100 <= 400 + Math.max(100, h), `a ${h}-high map keeps the token on it, not over the edge`);
-    assert(spot.y >= 400, `a ${h}-high map keeps the token at or below the top edge`);
+check("T36 a new access point waits in the middle of the map, not in the margin below it", () => {
+  /* The live test scene: 100px grid, a 3840x2160 casino map laid at the scene origin. That is 38.4
+     by 21.6 squares, so whole squares are counted and the middle ones are 19 across and 10 down. */
+  eq(M.accessPointSpot(1000, 400, 3840, 2160, 100), { x: 2900, y: 1400 }, "the middle square of the map");
+
+  // squares are counted from the scene origin, so padding that is not a multiple of the grid stays aligned to it
+  eq(M.accessPointSpot(1050, 450, 3840, 2160, 100), { x: 2950, y: 1450 }, "off-grid padding keeps its own alignment");
+
+  // a map smaller than one square still leaves the token on it
+  eq(M.accessPointSpot(0, 0, 40, 40, 100), { x: 0, y: 0 }, "a tiny map keeps it at the origin");
+
+  // whatever the map's size, the token lands inside it rather than over an edge
+  for (const [w, h] of [[3840, 2160], [2000, 2000], [1999, 1999], [100, 100], [101, 101], [4000, 300]]) {
+    const spot = M.accessPointSpot(1000, 400, w, h, 100);
+    assert(spot.x >= 1000 && spot.x + 100 <= 1000 + Math.max(100, w), `a ${w}-wide map keeps the token on it`);
+    assert(spot.y >= 400 && spot.y + 100 <= 400 + Math.max(100, h), `a ${h}-high map keeps the token on it`);
   }
 });
 
