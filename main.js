@@ -945,13 +945,16 @@ async function jackInNow(scene, body, bodyId, net) {
   data.hidden = false;
   data.sight = { ...(data.sight ?? {}), enabled: true };
   data.flags = { ...(data.flags ?? {}), [ID]: { avatarOf: bodyId, net: net.tag } };
-  await scene.createEmbeddedDocuments("Token", [data]);
+  const [avatar] = await scene.createEmbeddedDocuments("Token", [data]);
   // Fog of war is one sheet for every level, so pause fog memory while anyone is jacked in. Restored on the last jack out.
   if (scene.fog?.exploration && scene.getFlag(ID, "fogWas") === undefined) {
     await scene.setFlag(ID, "fogWas", true);
     await scene.update({ "fog.exploration": false });
   }
   await ChatMessage.create({ speaker: ChatMessage.getSpeaker({ actor: body.actor, token: body }), content: `<b>${body.name} jacks in.</b>${await netActionCost(body)}` });
+  /* After the cost line, never before it. Waking a Demon opens a fight, and a jack in charged out
+     of the fight it just started would invert the rule that jacking is free off the clock. */
+  await wakeDemons(scene, avatar);
 }
 
 /** Jacking in and out are both NET Actions. Takes one and says what is left. */
@@ -978,7 +981,11 @@ function combatOf(token) {
    out of: a started fight holding this runner's own token. Jacking in to an empty Architecture
    off the clock costs nothing, and says nothing. */
 function turnRunning(token) {
-  return !!combatOf(token)?.started;
+  if (combatOf(token)?.started) return true;
+  /* A fight that started inside the Architecture holds the avatar; the body is only a combatant
+     when the meat is fighting too. Either one running means there is a Turn to spend out of. */
+  const avatar = token?.parent?.tokens ? avatarOf(token.parent, token.id) : null;
+  return !!(avatar && combatOf(avatar)?.started);
 }
 
 async function netActionCost(body) {
@@ -1152,6 +1159,12 @@ function sleepersOn(scene, floor) {
     if (t.getFlag(ID, SLEEPING) === false) return false;
     return floorOfToken(t)?.n === floor.n;
   });
+}
+
+/** The Demons a jack in wakes: every one the build placed that is still lying in wait. */
+function demonsToWake(tokens, floorOf = floorOfToken) {
+  return [...(tokens ?? [])].filter((t) => t.actor?.type === "demon"
+    && t.getFlag?.(ID, SLEEPING) !== false && !!floorOf(t));
 }
 
 /** The Netrunner role item on an actor, whatever the item happens to be called. */
@@ -1440,11 +1453,11 @@ async function speedContest(actor, token) {
 }
 
 /** Put a token in a combat if it is not already there, and hand back its combatant. */
-async function combatantFor(combat, scene, token) {
+async function combatantFor(combat, scene, token, hidden = false) {
   const found = combat.combatants.find((x) => x.tokenId === token.id);
   if (found) return found;
   const [made] = await combat.createEmbeddedDocuments("Combatant", [
-    { tokenId: token.id, sceneId: scene.id, actorId: token.actorId },
+    { tokenId: token.id, sceneId: scene.id, actorId: token.actorId, hidden },
   ]);
   return made;
 }
@@ -1468,9 +1481,9 @@ async function combatFor(scene, avatar) {
 }
 
 /** Wake a token: it stops lying in wait and enters the order above everyone else. */
-async function wake(combat, scene, token) {
+async function wake(combat, scene, token, hidden = false) {
   await token.update({ [`flags.${ID}.${SLEEPING}`]: false }, { cprNetarch: true });
-  const c = await combatantFor(combat, scene, token);
+  const c = await combatantFor(combat, scene, token, hidden);
   const highest = Math.max(0, ...combat.combatants.map((x) => Number(x.initiative) || 0));
   await combat.setInitiative(c.id, highest + 1);
   /* Only a fight this module opened gets started automatically. An encounter the GM has staged in
@@ -1481,13 +1494,43 @@ async function wake(combat, scene, token) {
   return combat;
 }
 
+/* A Demon is not a floor encounter. It has no SPD to contest, ignores Passwords, always knows a
+   runner is present, and enters the queue the moment a runner enters its Architecture, so every
+   Demon in the build wakes on jack in wherever its token sits. One the runner has not walked into
+   yet joins the tracker hidden: a turn order reading "Efreet" would hand them the bottom floor
+   for free, ahead of any Pathfinder check. */
+async function wakeDemons(scene, avatar) {
+  const demons = demonsToWake(scene.tokens);
+  if (!demons.length) return;
+  const combat = await combatFor(scene, avatar);
+  const here = floorOfToken(avatar)?.n ?? null;
+  for (const t of demons) await wake(combat, scene, t, floorOfToken(t)?.n !== here);
+  await ChatMessage.create({
+    speaker: { alias: "NET Architecture" },
+    whisper: whisperFor(avatar.actor),
+    content: `<div class="cpr-netarch-summary"><h3>Something is already awake</h3>
+      <p>${demons.length === 1 ? "A Demon knows" : `${demons.length} Demons know`} you are in the Architecture.
+      No Speed Contest and no free hit, but ${demons.length === 1 ? "it is" : "they are"} in the order from here on.</p></div>`,
+  });
+}
+
 /** The runner has stepped into a room. Anything lying in wait there rolls against them. */
 async function enterFloor(scene, avatar, floor) {
   const actor = avatar.actor;
   const sleepers = sleepersOn(scene, floor);
-  if (!actor || !sleepers.length) return;
+  /* A Demon woken at jack in is already in the order, hidden. Walking into its room is where the
+     runner actually meets it, and so where it is revealed. */
+  const waiting = scene.tokens.filter((t) => t.actor?.type === "demon"
+    && t.getFlag(ID, SLEEPING) === false && floorOfToken(t)?.n === floor.n);
+  if (!actor || (!sleepers.length && !waiting.length)) return;
   const combat = await combatFor(scene, avatar);
   const lines = [];
+  for (const t of waiting) {
+    const c = combat.combatants.find((x) => x.tokenId === t.id);
+    if (!c?.hidden) continue;
+    await c.update({ hidden: false });
+    lines.push(`<b>${esc(t.name)}</b> is here, and has been in the order since you jacked in.`);
+  }
   for (const t of sleepers) {
     if (t.actor.type === "demon") {
       lines.push(`<b>${esc(t.name)}</b> is a Demon: no SPD to contest. It knows you are here.`);
@@ -1499,6 +1542,7 @@ async function enterFloor(scene, avatar, floor) {
     }
     await wake(combat, scene, t);
   }
+  if (!lines.length) return;
   await ChatMessage.create({
     speaker: { alias: "NET Architecture" },
     whisper: whisperFor(actor),
@@ -2019,4 +2063,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, accessPointSpot, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, demonsToWake, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, accessPointSpot, landEffect, iceActorData, demonActorData, summaryHtml };

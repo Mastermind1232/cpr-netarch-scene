@@ -662,6 +662,17 @@ check("T31 jacking only costs a NET Action while a Turn is actually running", as
   assert(!M.turnRunning(body), "someone else's fight is not the runner's Turn");
   eq(M.netPool(cipher).left, 3, "so still nothing spent");
 
+  /* A fight that opens inside the Architecture holds the avatar and never the body, so asking
+     only about the body would make every NET Action free for the whole run. */
+  const avatar = { id: "av1", getFlag: (m, k) => (k === "avatarOf" ? "body1" : undefined) };
+  const sceneA = { id: "sceneA", tokens: [avatar] };
+  avatar.parent = sceneA;
+  game.combats = [fakeCombat({ holds: [avatar] })];
+  assert(M.turnRunning({ id: "body1", parent: sceneA, actor: cipher }),
+    "the runner's own avatar in a started fight is a Turn");
+  assert(!M.turnRunning({ id: "body2", parent: sceneA, actor: cipher }),
+    "but another runner's body borrows nothing from it");
+
   game.combats = [fakeCombat({ holds: [body] })];
   assert(M.turnRunning(body), "a started fight holding the runner's token is a Turn");
   assert((await M.netActionCost(body)).includes("2 left"), "now jacking costs one and says so");
@@ -846,6 +857,26 @@ check("T30 every piece of ICE has an effect, and a Wisp's lands on HP and the po
   const liche = await M.landEffect(fakeRunner({ rank: 5 }), { name: "Liche", actor: { name: "Liche", type: "blackIce" } });
   assert(/INT &minus;2, REF &minus;5, DEX &minus;6/.test(liche), `the Liche rolls each stat: ${liche}`);
   delete globalThis.Roll;
+});
+
+check("T37 jacking in wakes every Demon in the build, and nothing else", () => {
+  const ID = "cpr-netarch-scene";
+  const tok = (name, type, asleep, floor) => ({
+    name, actor: { type },
+    getFlag: (m, k) => (m === ID && k === "asleep" ? asleep : undefined),
+    floor,
+  });
+  const floorOf = (t) => (t.floor == null ? null : { n: t.floor });
+  const tokens = [
+    tok("Imp", "demon", undefined, 4),          // never touched, still lying in wait
+    tok("Efreet", "demon", true, 12),           // explicitly asleep, at the far end
+    tok("Balron", "demon", false, 7),           // already awake from an earlier run
+    tok("Hellhound", "blackIce", undefined, 3), // ICE waits for its own room
+    tok("Cipher (NET)", "character", undefined, 1),
+    tok("Imp", "demon", undefined, null),       // a Demon token dragged off the map
+  ];
+  const woken = M.demonsToWake(tokens, floorOf).map((t) => t.name);
+  eq(woken.join(","), "Imp,Efreet", "only the sleeping Demons standing on a floor wake");
 });
 
 queue.then(() => {
