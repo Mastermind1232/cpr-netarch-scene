@@ -938,6 +938,36 @@ check("T39 Pathfinder never prints a DV", () => {
   eq(M.floorPlain({ n: 2, items: [] }), "an empty room", "an empty floor still reads as something");
 });
 
+check("T40 Black ICE programs file damage on the side the sheet reads", () => {
+  /* The sheet picks damage.blackIce for an Anti-Program ICE and damage.standard for an
+     Anti-Personnel one, so a formula on the wrong side renders as nothing at all. */
+  const hound = M.iceProgramData("Hellhound");
+  eq(hound.system.class, "blackice", "the program is the class the sheet filters on");
+  eq(hound.system.blackIceType, "antipersonnel", "and carries its own class");
+  eq(hound.system.damage.standard, "2d6", "an Anti-Personnel formula goes in standard");
+  eq(hound.system.damage.blackIce, "0", "and nothing in the other");
+
+  const killer = M.iceProgramData("Killer");
+  eq(killer.system.damage.blackIce, "4d6", "an Anti-Program formula goes in blackIce");
+  eq(killer.system.damage.standard, "0", "and nothing in the other");
+
+  // the stats the sheet copies across have to be the ones the module already uses
+  eq(killer.system.atk, M.ICE.Killer.atk, "ATK matches the module's own table");
+  eq(killer.system.rez.max, M.ICE.Killer.rez, "and so does REZ");
+
+  // every name the module can place needs a formula, even if that formula is zero
+  for (const name of Object.keys(M.ICE)) {
+    assert(typeof M.ICE_DAMAGE[name] === "string", `${name} has no damage entry`);
+    const made = M.iceProgramData(name);
+    const side = M.ICE[name].cls === "antiprogram" ? "blackIce" : "standard";
+    eq(made.system.damage[side], M.ICE_DAMAGE[name], `${name} files its formula under ${side}`);
+  }
+
+  // an effect that is not damage stays zero on both sides rather than inventing dice
+  eq(M.iceProgramData("Scorpion").system.damage.standard, "0", "a Scorpion deals no damage");
+  eq(M.iceProgramData("Skunk").system.damage.blackIce, "0", "and neither does a Skunk");
+});
+
 queue.then(() => {
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

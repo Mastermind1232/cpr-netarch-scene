@@ -17,6 +17,7 @@
  */
 
 const ID = "cpr-netarch-scene";
+const CPR = "cyberpunk-red-core";                // the system's own flag scope, which its sheets read
 const G = 150;                                   // grid size of the backdrop, px
 const SCENE = { width: 3840, height: 2160 };
 /**
@@ -605,6 +606,34 @@ function iceActorData(name, art, folder = null, items = []) {
   };
 }
 
+/* What each piece of Black ICE rolls when it lands. The CPR sheet reads the formula off a
+   linked program rather than off the actor, and reads damage.blackIce for an Anti-Program
+   ICE and damage.standard for an Anti-Personnel one, so each name files its number in
+   exactly one of the two and leaves the other at zero. An ICE whose effect is not damage
+   at all, such as the Scorpion or the Skunk, is zero in both and says so on the sheet. */
+const ICE_DAMAGE = {
+  Asp: "0", Giant: "3d6", Hellhound: "2d6", Kraken: "3d6", Liche: "0", Raven: "1d6",
+  Scorpion: "0", Skunk: "0", Wisp: "1d6", Dragon: "6d6", Killer: "4d6", Sabertooth: "6d6",
+};
+
+/** The program Item that carries a piece of Black ICE's damage formula for the CPR sheet. */
+function iceProgramData(name) {
+  const d = ICE[name];
+  if (!d) throw new Error(`Unknown Black ICE "${name}".`);
+  const dmg = ICE_DAMAGE[name] ?? "0";
+  const antiProgram = d.cls === "antiprogram";
+  return {
+    name, type: "program",
+    system: {
+      class: "blackice", blackIceType: d.cls,
+      damage: { standard: antiProgram ? "0" : dmg, blackIce: antiProgram ? dmg : "0" },
+      per: d.per, spd: d.spd, atk: d.atk, def: d.def, rez: { value: d.rez, max: d.rez },
+      description: { value: `<p><strong>${antiProgram ? "Anti-Program" : "Anti-Personnel"}.</strong> ${d.effect}</p>` },
+      price: { market: d.cost }, size: 2, usage: "toggled",
+    },
+  };
+}
+
 function demonActorData(name, art, folder = null) {
   const d = DEMONS[name];
   if (!d) throw new Error(`Unknown Demon "${name}".`);
@@ -638,6 +667,9 @@ Hooks.once("init", () => {
   Hooks.once("setup", registerSense);
   Hooks.once("ready", registerSense);
   Hooks.on("canvasReady", registerSense);
+  /* Repairs architectures built before the link existed as well as new ones, so a scene
+     never has to be rebuilt to get the sheet's damage control. */
+  Hooks.on("canvasReady", () => { if (theGM()) linkIceTokens(canvas?.scene).catch(reportErr); });
   Hooks.on("renderTokenConfig", registerSense);
   game.settings.register(ID, "backdrop", {
     name: "Backdrop",
@@ -671,22 +703,35 @@ Hooks.once("init", () => {
   });
 });
 
-async function ensureFolder(name) {
-  const found = game.folders.find((f) => f.type === "Actor" && f.name === name);
-  return found ?? Folder.create({ name, type: "Actor" });
+async function ensureFolder(name, type = "Actor") {
+  const found = game.folders.find((f) => f.type === type && f.name === name);
+  return found ?? Folder.create({ name, type });
 }
 
-/** The matching Black ICE program item from any Item compendium, so the sheet can roll damage. */
-async function findProgramItem(name) {
-  try {
-    for (const pack of game.packs) {
-      if (pack.metadata.type !== "Item") continue;
-      const idx = await pack.getIndex();
-      const e = idx.find((i) => i.type === "program" && i.name?.toLowerCase() === name.toLowerCase());
-      if (e) { const doc = await pack.getDocument(e._id); if (doc) return doc.toObject(); }
-    }
-  } catch (err) { console.warn(`${ID} | program lookup failed for ${name}`, err); }
-  return null;
+/** The world program Item for a piece of Black ICE, made once and reused. CPR ships none of
+ *  these in any compendium, which is the whole reason the sheet had nothing to read. */
+async function ensureIceProgram(name) {
+  const key = String(name ?? "").toLowerCase();
+  const found = game.items.find((i) => i.type === "program"
+    && i.system?.class === "blackice" && i.name?.toLowerCase() === key);
+  if (found) return found;
+  const folder = await ensureFolder(ACTOR_FOLDER, "Item");
+  return Item.create({ ...iceProgramData(name), folder: folder.id });
+}
+
+/** Point every Black ICE token on a built architecture at its program.
+ *  Idempotent, and a token already holding a live link is left alone. */
+async function linkIceTokens(scene) {
+  if (!scene || !netRecord(scene)) return;
+  for (const t of scene.tokens) {
+    if (t.actor?.type !== "blackIce") continue;
+    const held = t.getFlag(CPR, "programUUID");
+    if (held && game.items.some((i) => i.uuid === held)) continue;
+    const name = iceName(t);
+    if (!name) continue;
+    const prog = await ensureIceProgram(name);
+    if (prog) await t.setFlag(CPR, "programUUID", prog.uuid);
+  }
 }
 
 async function ensureActor(name, art) {
@@ -695,7 +740,7 @@ async function ensureActor(name, art) {
   if (found) return found;
   const folder = await ensureFolder(ACTOR_FOLDER);
   const data = type === "blackIce"
-    ? iceActorData(name, art, folder.id, [await findProgramItem(name)].filter(Boolean))
+    ? iceActorData(name, art, folder.id)
     : demonActorData(name, art, folder.id);
   return Actor.create(data);
 }
@@ -2137,4 +2182,4 @@ Hooks.on("renderSceneDirectory", (app, html) => {
   header.appendChild(btn);
 });
 
-globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, demonsToWake, entryPlain, floorPlain, pathfinderReach, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, accessPointSpot, landEffect, iceActorData, demonActorData, summaryHtml };
+globalThis.CPRNetArch = { ID, G, LAT, PAD, ROOM, NET_SPACE, NET_LEVEL, TIERS, TIER_DV, ICE, DEMONS, LOBBY, BODY, parseEntry, parseText, toText, rollArchitecture, rollFloor, tableForPath, seenExcept, floorAt, layout, roomAt, buildSceneData, netRecord, floorOfPoint, floorOfToken, avatarMoved, netrunnerRole, netBonus, interfaceOf, interfaceRank, iceName, iceData, sleepersOn, demonsToWake, entryPlain, floorPlain, pathfinderReach, speedContest, NET_ACTIONS, NET_ABILITIES, ICE_EFFECT, baseNetActions, netPool, refillNetActions, chargeNetActions, spendNetAction, turnRunning, netActionCost, combatOf, brainSoak, rezzedArmor, accessPointSpot, landEffect, iceActorData, demonActorData, iceProgramData, ICE_DAMAGE, summaryHtml };

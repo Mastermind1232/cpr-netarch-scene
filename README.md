@@ -70,6 +70,16 @@ Of each landed effect, brain damage and NET Action penalties are applied directl
 
 When the last runner jacks out safely the Architecture's defenses reset: every woken piece of ICE goes back to lying in wait and leaves the initiative queue.
 
+## The Black ICE damage control
+
+The CPR Black ICE sheet already carries a damage control and an apply step, and neither appears unless the token holds a `programUUID` flag pointing at a world program Item. The damage formula lives on that program rather than on the Black ICE actor, which is why the sheet's DMG field reads N/A on an architecture built without one. Cyberpunk RED ships no Black ICE programs in any compendium, so there is nothing for the flag to point at until something makes one.
+
+The module makes them. Opening a scene that holds a built architecture files a program Item for every piece of Black ICE on it, under an Item folder named after the architecture folder, and sets the flag on each token. An Anti-Personnel ICE files its formula under `damage.standard` and an Anti-Program ICE under `damage.blackIce`, because those are the two fields the sheet reads for the two classes. A piece of ICE whose effect is not damage, such as a Scorpion or a Skunk, is zero in both and continues to say what it actually does in its notes.
+
+The pass runs on the active GM's client only, is idempotent, and leaves alone any token already holding a link to an Item that still exists. Architectures built before this existed are repaired by opening them, so no scene needs rebuilding.
+
+With the link in place the sheet behaves as Cyberpunk RED intended: the droplet rolls the ICE's damage, and the roll card lists whoever is targeted with an apply button that runs the system's own damage application, including brain damage reduction. The module's own resolution on walking into a room is unchanged and still applies brain damage directly.
+
 ## Pathfinder
 
 Pathfinder is the one Interface Ability the module resolves itself, because the number of floors it reads is the check total and the sheet's own roll never hands that back. Clicking Pathfinder on the Fight tab, with a NET Architecture on the scene, runs the same CPR check the sheet would have run, with the roll dialog, LUCK and the CPR roll card, and then posts what was read. The NET Action is taken once, by the click, exactly as it is for every other ability.
